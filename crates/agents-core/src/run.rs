@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::agent::Agent;
@@ -8,14 +7,8 @@ use crate::errors::Result;
 use crate::items::{InputItem, OutputItem};
 use crate::model::{ModelProvider, ModelRequest};
 use crate::result::RunResult;
+use crate::run_config::{DEFAULT_MAX_TURNS, RunConfig};
 use crate::tracing::Trace;
-
-/// Run-level configuration.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub struct RunConfig {
-    pub max_turns: usize,
-    pub workflow_name: Option<String>,
-}
 
 /// Entry point for executing agents.
 #[derive(Clone, Default)]
@@ -29,8 +22,9 @@ impl Runner {
         Self {
             model_provider: None,
             config: RunConfig {
-                max_turns: 10,
-                workflow_name: None,
+                max_turns: DEFAULT_MAX_TURNS,
+                workflow_name: "Agent workflow".to_owned(),
+                ..RunConfig::default()
             },
         }
     }
@@ -52,11 +46,11 @@ impl Runner {
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
         let trace = Trace {
             id: Uuid::new_v4(),
-            workflow_name: self
-                .config
-                .workflow_name
-                .clone()
-                .unwrap_or_else(|| agent.name.clone()),
+            workflow_name: if self.config.workflow_name.is_empty() {
+                agent.name.clone()
+            } else {
+                self.config.workflow_name.clone()
+            },
         };
 
         let output = if let Some(model_provider) = &self.model_provider {

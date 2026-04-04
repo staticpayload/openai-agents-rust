@@ -24,7 +24,10 @@ use crate::tool_context::{ToolCall, ToolContext};
 use crate::tool_guardrails::{
     ToolGuardrailBehavior, ToolInputGuardrailResult, ToolOutputGuardrailResult,
 };
-use crate::tracing::Trace;
+use crate::tracing::{
+    SpanData, TraceCtxManager, function_span, get_model_tracing_impl, get_trace_provider,
+    handoff_span,
+};
 use crate::usage::Usage;
 
 const DEFAULT_APPROVAL_REJECTION_MESSAGE: &str = "Tool execution was not approved.";
@@ -97,14 +100,13 @@ impl Runner {
         base_input: Vec<InputItem>,
         session: Option<&(dyn Session + Sync)>,
     ) -> Result<RunResult> {
-        let trace = Trace {
-            id: Uuid::new_v4(),
-            workflow_name: if self.config.workflow_name.is_empty() {
-                agent.name.clone()
-            } else {
-                self.config.workflow_name.clone()
-            },
+        let workflow_name = if self.config.workflow_name.is_empty() {
+            agent.name.clone()
+        } else {
+            self.config.workflow_name.clone()
         };
+        let mut trace_manager = TraceCtxManager::new(&workflow_name);
+        let trace = trace_manager.trace().clone();
 
         let mut context = internal_guardrails::new_run_context(trace.workflow_name.clone());
         context.turn_input = original_input.clone();
@@ -161,6 +163,13 @@ impl Runner {
             raw_responses.push(response);
 
             if let Some(target_agent) = resolve_handoff_agent(&current_agent, &output)? {
+                let provider = get_trace_provider();
+                let mut span = handoff_span(
+                    Some(current_agent.name.clone()),
+                    Some(target_agent.name.clone()),
+                );
+                provider.start_span(&mut span, true);
+                provider.finish_span(&mut span, true);
                 generated_items.push(RunItem::HandoffOutput {
                     source_agent: current_agent.name.clone(),
                 });
@@ -195,6 +204,7 @@ impl Runner {
         }
 
         if final_output_items.is_empty() && final_output.is_none() && interruptions.is_empty() {
+            let _ = trace_manager.finish();
             return Err(MaxTurnsExceeded {
                 message: format!(
                     "run for agent `{}` exceeded max_turns ({}) before producing a final output",
@@ -248,6 +258,8 @@ impl Runner {
         if let Some(interruption) = interruptions.first().cloned() {
             run_state.current_step = Some(interruption);
         }
+        let trace = trace_manager.finish();
+        run_state.set_trace(trace.clone());
 
         Ok(RunResult {
             agent_name: agent.name.clone(),
@@ -471,6 +483,10 @@ impl Runner {
         previous_response_id: Option<&str>,
         conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
+        let provider = get_trace_provider();
+        let mut span = get_model_tracing_impl(agent.model.as_deref());
+        provider.start_span(&mut span, true);
+
         if let Some(model_provider) = &self.model_provider {
             let request = ModelRequest {
                 trace_id: Some(trace_id),
@@ -478,13 +494,29 @@ impl Runner {
                 instructions: agent.instructions.clone(),
                 previous_response_id: previous_response_id.map(ToOwned::to_owned),
                 conversation_id: conversation_id.map(ToOwned::to_owned),
+                settings: Default::default(),
                 input: prepared_input.to_vec(),
                 tools: agent.tool_definitions(),
             };
-            model_provider
+            let response = model_provider
                 .resolve(agent.model.as_deref())
                 .generate(request)
-                .await
+                .await;
+            match response {
+                Ok(response) => {
+                    if let SpanData::Generation(data) = &mut span.data {
+                        data.model = response.model.clone();
+                        data.usage = serde_json::to_value(&response.usage).ok();
+                    }
+                    provider.finish_span(&mut span, true);
+                    Ok(response)
+                }
+                Err(error) => {
+                    span.set_error(error.to_string(), None);
+                    provider.finish_span(&mut span, true);
+                    Err(error)
+                }
+            }
         } else {
             let text = prepared_input
                 .iter()
@@ -492,13 +524,19 @@ impl Runner {
                 .find_map(InputItem::as_text)
                 .unwrap_or_default()
                 .to_owned();
-            Ok(ModelResponse {
+            let response = ModelResponse {
                 model: agent.model.clone(),
                 output: vec![OutputItem::Text { text }],
                 usage: Usage::default(),
                 response_id: None,
                 request_id: None,
-            })
+            };
+            if let SpanData::Generation(data) = &mut span.data {
+                data.model = response.model.clone();
+                data.usage = serde_json::to_value(&response.usage).ok();
+            }
+            provider.finish_span(&mut span, true);
+            Ok(response)
         }
     }
 }
@@ -546,10 +584,18 @@ async fn execute_local_function_tools(
         let tool_context = ToolContext::from_tool_call(context, tool_call.clone())
             .with_agent(agent.clone())
             .with_run_config(run_config.clone());
+        let provider = get_trace_provider();
+        let mut span = function_span(
+            &tool_context.trace_name(),
+            Some(tool_call.arguments.clone()),
+            None,
+        );
+        provider.start_span(&mut span, true);
 
         if function_tool.needs_approval {
             match context.approvals.get(&tool_call.id) {
                 None => {
+                    provider.finish_span(&mut span, true);
                     interruptions.push(RunInterruption {
                         kind: Some(RunInterruptionKind::ToolApproval),
                         call_id: Some(tool_call.id.clone()),
@@ -571,6 +617,10 @@ async fn execute_local_function_tools(
                         call_id: Some(tool_call.id),
                         namespace: tool_call.namespace,
                     });
+                    if let SpanData::Function(data) = &mut span.data {
+                        data.output = Some("tool approval rejected".to_owned());
+                    }
+                    provider.finish_span(&mut span, true);
                     continue;
                 }
                 Some(_) => {}
@@ -591,6 +641,11 @@ async fn execute_local_function_tools(
                     invocation_rejected = Some(ToolOutput::from(message.as_str()));
                 }
                 ToolGuardrailBehavior::RaiseException => {
+                    span.set_error(
+                        format!("tool input guardrail `{}` triggered", result.guardrail_name),
+                        None,
+                    );
+                    provider.finish_span(&mut span, true);
                     return Err(ToolInputGuardrailTripwireTriggered {
                         guardrail_name: result.guardrail_name.clone(),
                         output: result.output.clone(),
@@ -625,6 +680,14 @@ async fn execute_local_function_tools(
                     output = ToolOutput::from(message.as_str());
                 }
                 ToolGuardrailBehavior::RaiseException => {
+                    span.set_error(
+                        format!(
+                            "tool output guardrail `{}` triggered",
+                            result.guardrail_name
+                        ),
+                        None,
+                    );
+                    provider.finish_span(&mut span, true);
                     return Err(ToolOutputGuardrailTripwireTriggered {
                         guardrail_name: result.guardrail_name.clone(),
                         output: result.output.clone(),
@@ -641,6 +704,10 @@ async fn execute_local_function_tools(
             call_id: Some(tool_call.id),
             namespace: tool_call.namespace,
         });
+        if let SpanData::Function(data) = &mut span.data {
+            data.output = serde_json::to_string(&output).ok();
+        }
+        provider.finish_span(&mut span, true);
     }
 
     Ok(ToolExecutionOutcome {

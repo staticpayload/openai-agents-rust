@@ -149,6 +149,7 @@ mod tests {
             instructions: Some("Be precise".to_owned()),
             previous_response_id: None,
             conversation_id: None,
+            settings: Default::default(),
             input: vec![
                 InputItem::from("hello"),
                 InputItem::Json {

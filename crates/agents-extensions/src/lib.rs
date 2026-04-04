@@ -12,7 +12,7 @@ pub mod experimental {
 }
 
 pub mod memory {
-    use agents_core::{InputItem, MemorySession, Result, Session};
+    use agents_core::{InputItem, MemorySession, Result, Session, SessionSettings};
     use async_trait::async_trait;
 
     #[derive(Clone, Debug)]
@@ -36,8 +36,12 @@ pub mod memory {
             self.inner.session_id()
         }
 
-        async fn get_items(&self) -> Result<Vec<InputItem>> {
-            self.inner.get_items().await
+        fn session_settings(&self) -> Option<&SessionSettings> {
+            self.inner.session_settings()
+        }
+
+        async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+            self.inner.get_items_with_limit(limit).await
         }
 
         async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -48,8 +52,8 @@ pub mod memory {
             self.inner.pop_item().await
         }
 
-        async fn clear(&self) -> Result<()> {
-            self.inner.clear().await
+        async fn clear_session(&self) -> Result<()> {
+            self.inner.clear_session().await
         }
     }
 
@@ -74,8 +78,12 @@ pub mod memory {
             self.inner.session_id()
         }
 
-        async fn get_items(&self) -> Result<Vec<InputItem>> {
-            self.inner.get_items().await
+        fn session_settings(&self) -> Option<&SessionSettings> {
+            self.inner.session_settings()
+        }
+
+        async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+            self.inner.get_items_with_limit(limit).await
         }
 
         async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -86,8 +94,8 @@ pub mod memory {
             self.inner.pop_item().await
         }
 
-        async fn clear(&self) -> Result<()> {
-            self.inner.clear().await
+        async fn clear_session(&self) -> Result<()> {
+            self.inner.clear_session().await
         }
     }
 
@@ -112,8 +120,12 @@ pub mod memory {
             self.inner.session_id()
         }
 
-        async fn get_items(&self) -> Result<Vec<InputItem>> {
-            self.inner.get_items().await
+        fn session_settings(&self) -> Option<&SessionSettings> {
+            self.inner.session_settings()
+        }
+
+        async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+            self.inner.get_items_with_limit(limit).await
         }
 
         async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -124,8 +136,8 @@ pub mod memory {
             self.inner.pop_item().await
         }
 
-        async fn clear(&self) -> Result<()> {
-            self.inner.clear().await
+        async fn clear_session(&self) -> Result<()> {
+            self.inner.clear_session().await
         }
     }
 
@@ -150,8 +162,12 @@ pub mod memory {
             self.inner.session_id()
         }
 
-        async fn get_items(&self) -> Result<Vec<InputItem>> {
-            self.inner.get_items().await
+        fn session_settings(&self) -> Option<&SessionSettings> {
+            self.inner.session_settings()
+        }
+
+        async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+            self.inner.get_items_with_limit(limit).await
         }
 
         async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -162,8 +178,8 @@ pub mod memory {
             self.inner.pop_item().await
         }
 
-        async fn clear(&self) -> Result<()> {
-            self.inner.clear().await
+        async fn clear_session(&self) -> Result<()> {
+            self.inner.clear_session().await
         }
     }
 

@@ -2,6 +2,7 @@
 
 pub mod _config;
 pub mod _debug;
+pub mod _mcp_tool_metadata;
 pub mod _tool_identity;
 pub mod agent;
 pub mod agent_output;
@@ -21,7 +22,11 @@ pub(crate) mod internal;
 pub mod items;
 pub mod lifecycle;
 pub mod logger;
+pub mod mcp;
+pub mod memory;
 pub mod model;
+pub mod model_settings;
+pub mod models;
 pub mod prompts;
 pub mod result;
 pub mod retry;
@@ -35,6 +40,7 @@ pub mod strict_schema;
 pub mod tool;
 pub mod tool_context;
 pub mod tool_guardrails;
+#[path = "tracing/mod.rs"]
 pub mod tracing;
 pub mod usage;
 pub mod version;
@@ -87,7 +93,20 @@ pub use guardrail::{
 pub use handoff::Handoff;
 pub use items::{InputItem, OutputItem, RunItem};
 pub use lifecycle::{AgentHooks, RunHooks};
+pub use mcp::{
+    MCPServer, MCPServerManager, MCPTool, MCPToolAnnotations, MCPToolMetaContext,
+    MCPToolMetaResolver, MCPUtil, RequireApprovalObject, RequireApprovalToolList, ToolFilter,
+    ToolFilterCallable, ToolFilterContext, ToolFilterStatic, create_static_tool_filter,
+};
+pub use memory::{
+    MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
+    SQLiteSession, Session, SessionSettings, is_openai_responses_compaction_aware_session,
+};
 pub use model::{Model, ModelProvider, ModelRequest, ModelResponse};
+pub use model_settings::ModelSettings;
+pub use models::{
+    MultiProvider, MultiProviderMap, MultiProviderOpenAIPrefixMode, MultiProviderUnknownPrefixMode,
+};
 pub use prompts::{
     DynamicPromptFunction, GenerateDynamicPromptData, Prompt, PromptSpec, PromptUtil,
 };
@@ -106,7 +125,6 @@ pub use run_state::{
     CURRENT_RUN_STATE_SCHEMA_VERSION, RunInterruption, RunInterruptionKind, RunState,
     RunStateContextSnapshot,
 };
-pub use session::{MemorySession, Session};
 pub use stream_events::{
     AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent, StreamEvent,
 };

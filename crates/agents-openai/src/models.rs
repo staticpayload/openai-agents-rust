@@ -684,6 +684,7 @@ mod tests {
             instructions: Some("Be precise".to_owned()),
             previous_response_id: None,
             conversation_id: None,
+            settings: Default::default(),
             input: vec![InputItem::from("hello")],
             tools: vec![
                 ToolDefinition::new("search", "Search").with_input_json_schema(json!({
@@ -713,6 +714,7 @@ mod tests {
             instructions: Some("Be brief".to_owned()),
             previous_response_id: None,
             conversation_id: None,
+            settings: Default::default(),
             input: vec![
                 InputItem::from("hello"),
                 InputItem::Json {
@@ -752,6 +754,7 @@ mod tests {
             instructions: None,
             previous_response_id: None,
             conversation_id: None,
+            settings: Default::default(),
             input: vec![InputItem::Json {
                 value: json!({
                     "type": "tool_call_output",
@@ -781,6 +784,7 @@ mod tests {
             instructions: None,
             previous_response_id: Some("resp_123".to_owned()),
             conversation_id: Some("conv_123".to_owned()),
+            settings: Default::default(),
             input: vec![InputItem::from("hello")],
             tools: Vec::new(),
             trace_id: None,

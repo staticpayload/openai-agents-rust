@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use agents_core::{InputItem, MemorySession, Result, Session};
+use agents_core::{
+    InputItem, MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
+    Result, Session, SessionSettings,
+};
 use async_trait::async_trait;
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -54,8 +57,12 @@ impl Session for OpenAIConversationsSession {
         self.inner.session_id()
     }
 
-    async fn get_items(&self) -> Result<Vec<InputItem>> {
-        self.inner.get_items().await
+    fn session_settings(&self) -> Option<&SessionSettings> {
+        self.inner.session_settings()
+    }
+
+    async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+        self.inner.get_items_with_limit(limit).await
     }
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -66,8 +73,8 @@ impl Session for OpenAIConversationsSession {
         self.inner.pop_item().await
     }
 
-    async fn clear(&self) -> Result<()> {
-        self.inner.clear().await?;
+    async fn clear_session(&self) -> Result<()> {
+        self.inner.clear_session().await?;
         *self.conversation_id.lock().await = format!("conv_{}", Uuid::new_v4());
         *self.last_response_id.lock().await = None;
         Ok(())
@@ -209,8 +216,12 @@ impl Session for OpenAIResponsesCompactionSession {
         self.inner.session_id()
     }
 
-    async fn get_items(&self) -> Result<Vec<InputItem>> {
-        self.inner.get_items().await
+    fn session_settings(&self) -> Option<&SessionSettings> {
+        self.inner.session_settings()
+    }
+
+    async fn get_items_with_limit(&self, limit: Option<usize>) -> Result<Vec<InputItem>> {
+        self.inner.get_items_with_limit(limit).await
     }
 
     async fn add_items(&self, items: Vec<InputItem>) -> Result<()> {
@@ -230,12 +241,23 @@ impl Session for OpenAIResponsesCompactionSession {
         self.inner.pop_item().await
     }
 
-    async fn clear(&self) -> Result<()> {
-        self.inner.clear().await?;
+    async fn clear_session(&self) -> Result<()> {
+        self.inner.clear_session().await?;
         *self.response_id.lock().await = None;
         *self.deferred_response_id.lock().await = None;
         *self.last_unstored_response_id.lock().await = None;
         Ok(())
+    }
+
+    fn compaction_session(&self) -> Option<&dyn OpenAIResponsesCompactionAwareSession> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl OpenAIResponsesCompactionAwareSession for OpenAIResponsesCompactionSession {
+    async fn run_compaction(&self, _args: Option<OpenAIResponsesCompactionArgs>) -> Result<()> {
+        self.compact().await
     }
 }
 

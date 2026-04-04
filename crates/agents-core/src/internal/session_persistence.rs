@@ -3,14 +3,25 @@ use crate::exceptions::UserError;
 use crate::items::{InputItem, RunItem};
 use crate::run_config::RunConfig;
 use crate::session::Session;
+use crate::tracing::{custom_span, get_trace_provider};
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
     session: &(dyn Session + Sync),
 ) -> Result<(Vec<InputItem>, Vec<InputItem>)> {
+    let provider = get_trace_provider();
+    let mut span = custom_span(
+        "session.prepare_input",
+        std::collections::BTreeMap::from([(
+            "session_id".to_owned(),
+            serde_json::Value::String(session.session_id().to_owned()),
+        )]),
+    );
+    provider.start_span(&mut span, true);
     let mut prepared = session.get_items().await?;
     let original_input = input.to_vec();
     prepared.extend(original_input.clone());
+    provider.finish_span(&mut span, true);
     Ok((prepared, original_input))
 }
 
@@ -19,12 +30,22 @@ pub(crate) async fn save_result_to_session(
     original_input: &[InputItem],
     new_items: &[RunItem],
 ) -> Result<usize> {
+    let provider = get_trace_provider();
+    let mut span = custom_span(
+        "session.save_result",
+        std::collections::BTreeMap::from([(
+            "session_id".to_owned(),
+            serde_json::Value::String(session.session_id().to_owned()),
+        )]),
+    );
+    provider.start_span(&mut span, true);
     let mut items = original_input.to_vec();
     items.extend(new_items.iter().filter_map(RunItem::to_input_item));
     let count = items.len();
     if count > 0 {
         session.add_items(items).await?;
     }
+    provider.finish_span(&mut span, true);
     Ok(count)
 }
 

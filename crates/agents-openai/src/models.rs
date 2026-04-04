@@ -13,6 +13,12 @@ use crate::websocket::ResponsesWebSocketSession;
 
 static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(reqwest::Client::new);
 
+#[derive(Debug)]
+struct OpenAIHttpResponse {
+    payload: Value,
+    request_id: Option<String>,
+}
+
 /// Client options shared across OpenAI-backed transports.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OpenAIClientOptions {
@@ -149,9 +155,14 @@ impl OpenAIResponsesModel {
 impl Model for OpenAIResponsesModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
         let payload = self.build_payload(&request);
-        let value = post_json(&self.options.api_url("/responses"), &self.options, payload).await?;
+        let response =
+            post_json(&self.options.api_url("/responses"), &self.options, payload).await?;
 
-        Ok(parse_responses_response(&self.model, &value))
+        Ok(parse_responses_response(
+            &self.model,
+            &response.payload,
+            response.request_id,
+        ))
     }
 }
 
@@ -194,14 +205,18 @@ impl OpenAIChatCompletionsModel {
 impl Model for OpenAIChatCompletionsModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
         let payload = self.build_payload(&request);
-        let value = post_json(
+        let response = post_json(
             &self.options.api_url("/chat/completions"),
             &self.options,
             payload,
         )
         .await?;
 
-        Ok(parse_chat_completions_response(&self.model, &value))
+        Ok(parse_chat_completions_response(
+            &self.model,
+            &response.payload,
+            response.request_id,
+        ))
     }
 }
 
@@ -229,7 +244,11 @@ impl Model for OpenAIResponsesWsModel {
     }
 }
 
-async fn post_json(url: &str, options: &OpenAIClientOptions, payload: Value) -> Result<Value> {
+async fn post_json(
+    url: &str,
+    options: &OpenAIClientOptions,
+    payload: Value,
+) -> Result<OpenAIHttpResponse> {
     let response = HTTP_CLIENT
         .post(url)
         .headers(options.auth_headers()?)
@@ -238,6 +257,12 @@ async fn post_json(url: &str, options: &OpenAIClientOptions, payload: Value) -> 
         .await
         .map_err(|error| AgentsError::message(error.to_string()))?;
 
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .or_else(|| response.headers().get("request-id"))
+        .and_then(|value| value.to_str().ok())
+        .map(ToOwned::to_owned);
     let status = response.status();
     let text = response
         .text()
@@ -250,7 +275,12 @@ async fn post_json(url: &str, options: &OpenAIClientOptions, payload: Value) -> 
         )));
     }
 
-    serde_json::from_str(&text).map_err(|error| AgentsError::message(error.to_string()))
+    let payload =
+        serde_json::from_str(&text).map_err(|error| AgentsError::message(error.to_string()))?;
+    Ok(OpenAIHttpResponse {
+        payload,
+        request_id,
+    })
 }
 
 fn openai_response_input_item(item: &InputItem) -> Value {
@@ -422,7 +452,11 @@ fn openai_tool_payload(tool: &ToolDefinition) -> Value {
     })
 }
 
-fn parse_responses_response(model: &str, payload: &Value) -> ModelResponse {
+fn parse_responses_response(
+    model: &str,
+    payload: &Value,
+    request_id: Option<String>,
+) -> ModelResponse {
     let mut output = Vec::new();
     if let Some(items) = payload.get("output").and_then(Value::as_array) {
         for item in items {
@@ -507,10 +541,16 @@ fn parse_responses_response(model: &str, payload: &Value) -> ModelResponse {
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as u32,
         },
+        response_id: optional_string_field(payload, "id"),
+        request_id,
     }
 }
 
-fn parse_chat_completions_response(model: &str, payload: &Value) -> ModelResponse {
+fn parse_chat_completions_response(
+    model: &str,
+    payload: &Value,
+    request_id: Option<String>,
+) -> ModelResponse {
     let mut output = Vec::new();
     if let Some(message) = payload
         .get("choices")
@@ -554,6 +594,8 @@ fn parse_chat_completions_response(model: &str, payload: &Value) -> ModelRespons
                 .and_then(Value::as_u64)
                 .unwrap_or_default() as u32,
         },
+        response_id: None,
+        request_id,
     }
 }
 
@@ -769,12 +811,16 @@ mod tests {
                         "content": [{"type": "output_text", "text": "done"}]
                     }
                 ],
-                "usage": {"input_tokens": 3, "output_tokens": 4}
+                "usage": {"input_tokens": 3, "output_tokens": 4},
+                "id": "resp_123"
             }),
+            Some("req_123".to_owned()),
         );
 
         assert_eq!(parsed.usage.input_tokens, 3);
         assert_eq!(parsed.usage.output_tokens, 4);
+        assert_eq!(parsed.response_id.as_deref(), Some("resp_123"));
+        assert_eq!(parsed.request_id.as_deref(), Some("req_123"));
         assert!(matches!(parsed.output[0], OutputItem::Reasoning { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
         assert!(matches!(parsed.output[2], OutputItem::Text { .. }));
@@ -799,10 +845,13 @@ mod tests {
                 }],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 6}
             }),
+            Some("req_chat_123".to_owned()),
         );
 
         assert_eq!(parsed.usage.input_tokens, 5);
         assert_eq!(parsed.usage.output_tokens, 6);
+        assert_eq!(parsed.response_id, None);
+        assert_eq!(parsed.request_id.as_deref(), Some("req_chat_123"));
         assert!(matches!(parsed.output[0], OutputItem::Text { .. }));
         assert!(matches!(parsed.output[1], OutputItem::ToolCall { .. }));
     }
@@ -819,6 +868,7 @@ mod tests {
                     }
                 ]
             }),
+            None,
         );
 
         assert!(matches!(parsed.output[0], OutputItem::Json { .. }));

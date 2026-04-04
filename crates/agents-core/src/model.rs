@@ -28,6 +28,48 @@ pub struct ModelResponse {
     pub model: Option<String>,
     pub output: Vec<OutputItem>,
     pub usage: Usage,
+    pub response_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+impl ModelResponse {
+    pub fn to_input_items(&self) -> Vec<InputItem> {
+        self.output
+            .iter()
+            .map(|item| match item {
+                OutputItem::Text { text } => InputItem::Text { text: text.clone() },
+                OutputItem::Json { value } => InputItem::Json {
+                    value: value.clone(),
+                },
+                OutputItem::ToolCall {
+                    call_id,
+                    tool_name,
+                    arguments,
+                    namespace,
+                } => InputItem::Json {
+                    value: serde_json::json!({
+                        "type": "tool_call",
+                        "call_id": call_id,
+                        "tool_name": tool_name,
+                        "arguments": arguments,
+                        "namespace": namespace,
+                    }),
+                },
+                OutputItem::Handoff { target_agent } => InputItem::Json {
+                    value: serde_json::json!({
+                        "type": "handoff_call",
+                        "target_agent": target_agent,
+                    }),
+                },
+                OutputItem::Reasoning { text } => InputItem::Json {
+                    value: serde_json::json!({
+                        "type": "reasoning",
+                        "text": text,
+                    }),
+                },
+            })
+            .collect()
+    }
 }
 
 #[async_trait]

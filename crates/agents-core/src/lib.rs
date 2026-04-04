@@ -96,7 +96,7 @@ pub use retry::{
     ModelRetryAdvice, ModelRetryAdviceRequest, ModelRetryBackoffSettings,
     ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicyContext,
 };
-pub use run::{Runner, run};
+pub use run::{Runner, run, run_with_session};
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,
     ToolErrorFormatterArgs,

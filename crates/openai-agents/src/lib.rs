@@ -12,7 +12,7 @@ pub use agents_core::{
     ToolInputGuardrailResult, ToolOutput, ToolOutputFileContent, ToolOutputGuardrail,
     ToolOutputGuardrailData, ToolOutputGuardrailResult, ToolOutputImage, ToolOutputText, Trace,
     Usage, VERSION, apply_diff, function_tool, input_guardrail, output_guardrail, run,
-    tool_input_guardrail, tool_output_guardrail,
+    run_with_session, tool_input_guardrail, tool_output_guardrail,
 };
 pub use agents_openai::{
     OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL, OpenAIApi,

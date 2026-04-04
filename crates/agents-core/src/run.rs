@@ -11,12 +11,14 @@ use crate::exceptions::{
 };
 use crate::internal::guardrails as internal_guardrails;
 use crate::internal::items as internal_items;
+use crate::internal::session_persistence as internal_session_persistence;
 use crate::internal::turn_resolution as internal_turn_resolution;
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::{ModelProvider, ModelRequest, ModelResponse};
 use crate::result::RunResult;
 use crate::run_config::{DEFAULT_MAX_TURNS, RunConfig};
 use crate::run_state::{RunInterruption, RunInterruptionKind, RunState};
+use crate::session::Session;
 use crate::tool::{Tool, ToolOutput};
 use crate::tool_context::{ToolCall, ToolContext};
 use crate::tool_guardrails::{
@@ -61,6 +63,40 @@ impl Runner {
     }
 
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
+        self.run_items_internal(agent, input.clone(), input, None)
+            .await
+    }
+
+    pub async fn run_with_session(
+        &self,
+        agent: &Agent,
+        input: impl Into<InputItem>,
+        session: &(dyn Session + Sync),
+    ) -> Result<RunResult> {
+        self.run_items_with_session(agent, vec![input.into()], session)
+            .await
+    }
+
+    pub async fn run_items_with_session(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        session: &(dyn Session + Sync),
+    ) -> Result<RunResult> {
+        internal_session_persistence::validate_session_conversation_settings(&self.config)?;
+        let (prepared_input, original_input) =
+            internal_session_persistence::prepare_input_with_session(&input, session).await?;
+        self.run_items_internal(agent, original_input, prepared_input, Some(session))
+            .await
+    }
+
+    async fn run_items_internal(
+        &self,
+        agent: &Agent,
+        original_input: Vec<InputItem>,
+        base_input: Vec<InputItem>,
+        session: Option<&(dyn Session + Sync)>,
+    ) -> Result<RunResult> {
         let trace = Trace {
             id: Uuid::new_v4(),
             workflow_name: if self.config.workflow_name.is_empty() {
@@ -71,12 +107,12 @@ impl Runner {
         };
 
         let mut context = internal_guardrails::new_run_context(trace.workflow_name.clone());
-        context.turn_input = input.clone();
+        context.turn_input = original_input.clone();
 
         let input_guardrail_results = internal_guardrails::run_input_guardrails(
             agent,
             &agent.input_guardrails,
-            &input,
+            &original_input,
             &context,
         )
         .await?;
@@ -91,16 +127,24 @@ impl Runner {
         let mut interruptions = Vec::new();
         let mut final_output = None;
         let mut final_output_items = Vec::new();
+        let mut request_previous_response_id = self.config.previous_response_id.clone();
+        let request_conversation_id = self.config.conversation_id.clone();
 
         for _turn in 0..self.config.max_turns {
             let prepared_input = internal_items::prepare_model_input_items(
-                &input,
+                &base_input,
                 &generated_items,
                 self.config.reasoning_item_id_policy,
             );
 
             let response = self
-                .call_model(&current_agent, trace.id, &prepared_input)
+                .call_model(
+                    &current_agent,
+                    trace.id,
+                    &prepared_input,
+                    request_previous_response_id.as_deref(),
+                    request_conversation_id.as_deref(),
+                )
                 .await?;
             usage = merge_usage(usage, response.usage);
             context.usage = usage;
@@ -108,6 +152,12 @@ impl Runner {
             let output = response.output.clone();
             let response_items = internal_turn_resolution::build_message_output_items(&output);
             generated_items.extend(response_items);
+            if request_conversation_id.is_none()
+                && (self.config.auto_previous_response_id || request_previous_response_id.is_some())
+                && response.response_id.is_some()
+            {
+                request_previous_response_id = response.response_id.clone();
+            }
             raw_responses.push(response);
 
             if let Some(target_agent) = resolve_handoff_agent(&current_agent, &output)? {
@@ -154,18 +204,30 @@ impl Runner {
             .into());
         }
 
+        let persisted_item_count = if let Some(session) = session {
+            internal_session_persistence::save_result_to_session(
+                session,
+                &original_input,
+                &generated_items,
+            )
+            .await?
+        } else {
+            0
+        };
+
         let mut run_state = RunState::new(
             &context,
-            input.clone(),
+            original_input.clone(),
             agent.clone(),
             self.config.max_turns,
         )?;
         run_state.current_turn = raw_responses.len();
         run_state.set_current_agent(current_agent.clone());
         run_state.set_trace(trace.clone());
-        run_state.conversation_id = self.config.conversation_id.clone();
-        run_state.previous_response_id = self.config.previous_response_id.clone();
+        run_state.conversation_id = request_conversation_id.clone();
+        run_state.previous_response_id = request_previous_response_id.clone();
         run_state.auto_previous_response_id = self.config.auto_previous_response_id;
+        run_state.persisted_item_count = persisted_item_count;
         run_state.extend_generated_items(generated_items.clone());
         run_state.extend_session_items(generated_items.clone());
         for result in input_guardrail_results.iter().cloned() {
@@ -190,7 +252,7 @@ impl Runner {
         Ok(RunResult {
             agent_name: agent.name.clone(),
             last_agent: Some(current_agent),
-            input,
+            input: original_input,
             new_items: generated_items,
             raw_responses,
             output: final_output_items,
@@ -204,6 +266,9 @@ impl Runner {
             interruptions,
             usage,
             trace: Some(trace),
+            conversation_id: request_conversation_id,
+            previous_response_id: request_previous_response_id,
+            auto_previous_response_id: self.config.auto_previous_response_id,
         })
     }
 
@@ -267,6 +332,9 @@ impl Runner {
         if let Some(resumed_state) = result.run_state.as_mut() {
             merge_run_states(state, resumed_state);
             result.context_snapshot = resumed_state.context_snapshot.clone();
+            result.conversation_id = resumed_state.conversation_id.clone();
+            result.previous_response_id = resumed_state.previous_response_id.clone();
+            result.auto_previous_response_id = resumed_state.auto_previous_response_id;
         }
 
         result.trace = state.trace.clone().or(result.trace);
@@ -386,6 +454,9 @@ impl Runner {
         if let Some(resumed_state) = result.run_state.as_mut() {
             merge_run_states(&continued_state, resumed_state);
             result.context_snapshot = resumed_state.context_snapshot.clone();
+            result.conversation_id = resumed_state.conversation_id.clone();
+            result.previous_response_id = resumed_state.previous_response_id.clone();
+            result.auto_previous_response_id = resumed_state.auto_previous_response_id;
         }
 
         result.trace = continued_state.trace.clone().or(result.trace);
@@ -397,14 +468,16 @@ impl Runner {
         agent: &Agent,
         trace_id: Uuid,
         prepared_input: &[InputItem],
+        previous_response_id: Option<&str>,
+        conversation_id: Option<&str>,
     ) -> Result<ModelResponse> {
         if let Some(model_provider) = &self.model_provider {
             let request = ModelRequest {
                 trace_id: Some(trace_id),
                 model: agent.model.clone(),
                 instructions: agent.instructions.clone(),
-                previous_response_id: self.config.previous_response_id.clone(),
-                conversation_id: self.config.conversation_id.clone(),
+                previous_response_id: previous_response_id.map(ToOwned::to_owned),
+                conversation_id: conversation_id.map(ToOwned::to_owned),
                 input: prepared_input.to_vec(),
                 tools: agent.tool_definitions(),
             };
@@ -423,6 +496,8 @@ impl Runner {
                 model: agent.model.clone(),
                 output: vec![OutputItem::Text { text }],
                 usage: Usage::default(),
+                response_id: None,
+                request_id: None,
             })
         }
     }
@@ -430,6 +505,14 @@ impl Runner {
 
 pub async fn run(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
     Runner::new().run(agent, input).await
+}
+
+pub async fn run_with_session(
+    agent: &Agent,
+    input: impl Into<InputItem>,
+    session: &(dyn Session + Sync),
+) -> Result<RunResult> {
+    Runner::new().run_with_session(agent, input, session).await
 }
 
 struct ToolExecutionOutcome {
@@ -737,6 +820,7 @@ mod tests {
     use crate::errors::AgentsError;
     use crate::guardrail::{GuardrailFunctionOutput, input_guardrail, output_guardrail};
     use crate::model::Model;
+    use crate::session::MemorySession;
     use crate::tool::function_tool;
 
     use super::*;
@@ -770,6 +854,8 @@ mod tests {
                         input_tokens: 10,
                         output_tokens: 5,
                     },
+                    response_id: Some("resp-1".to_owned()),
+                    request_id: Some("req-1".to_owned()),
                 });
             }
 
@@ -805,6 +891,8 @@ mod tests {
                     input_tokens: 12,
                     output_tokens: 6,
                 },
+                response_id: Some("resp-2".to_owned()),
+                request_id: Some("req-2".to_owned()),
             })
         }
     }
@@ -844,6 +932,8 @@ mod tests {
                     text: "ok".to_owned(),
                 }],
                 usage: Usage::default(),
+                response_id: None,
+                request_id: None,
             })
         }
     }
@@ -879,6 +969,8 @@ mod tests {
                         input_tokens: 3,
                         output_tokens: 1,
                     },
+                    response_id: Some("resp-handoff-1".to_owned()),
+                    request_id: None,
                 });
             }
 
@@ -891,6 +983,8 @@ mod tests {
                     input_tokens: 4,
                     output_tokens: 2,
                 },
+                response_id: Some("resp-handoff-2".to_owned()),
+                request_id: None,
             })
         }
     }
@@ -900,6 +994,98 @@ mod tests {
     }
 
     impl ModelProvider for FakeHandoffProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct AutoPreviousResponseModel {
+        calls: Arc<Mutex<usize>>,
+        seen_previous_response_ids: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    #[async_trait]
+    impl Model for AutoPreviousResponseModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_previous_response_ids
+                .lock()
+                .expect("auto previous response capture lock")
+                .push(request.previous_response_id.clone());
+
+            let mut calls = self
+                .calls
+                .lock()
+                .expect("auto previous response calls lock");
+            *calls += 1;
+
+            if *calls == 1 {
+                return Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "call-1".to_owned(),
+                        tool_name: "search".to_owned(),
+                        arguments: json!({"query":"rust"}),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("resp-auto-1".to_owned()),
+                    request_id: Some("req-auto-1".to_owned()),
+                });
+            }
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "done".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-auto-2".to_owned()),
+                request_id: Some("req-auto-2".to_owned()),
+            })
+        }
+    }
+
+    struct AutoPreviousResponseProvider {
+        model: Arc<AutoPreviousResponseModel>,
+    }
+
+    impl ModelProvider for AutoPreviousResponseProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct SessionCaptureModel {
+        seen_inputs: Arc<Mutex<Vec<Vec<InputItem>>>>,
+    }
+
+    #[async_trait]
+    impl Model for SessionCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            self.seen_inputs
+                .lock()
+                .expect("session capture inputs lock")
+                .push(request.input.clone());
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "session-ok".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id: None,
+                request_id: None,
+            })
+        }
+    }
+
+    struct SessionCaptureProvider {
+        model: Arc<SessionCaptureModel>,
+    }
+
+    impl ModelProvider for SessionCaptureProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
         }
@@ -1246,5 +1432,109 @@ mod tests {
                 .and_then(|state| state.conversation_id.as_deref()),
             Some("conv_123")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_advances_auto_previous_response_id_across_turns() {
+        let model = Arc::new(AutoPreviousResponseModel::default());
+        let provider = Arc::new(AutoPreviousResponseProvider {
+            model: model.clone(),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                auto_previous_response_id: true,
+                ..RunConfig::default()
+            })
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+        assert_eq!(
+            model
+                .seen_previous_response_ids
+                .lock()
+                .expect("auto previous response ids lock")
+                .as_slice(),
+            &[None, Some("resp-auto-1".to_owned())]
+        );
+        assert_eq!(result.previous_response_id(), Some("resp-auto-2"));
+        assert_eq!(
+            result
+                .durable_state()
+                .and_then(|state| state.previous_response_id.as_deref()),
+            Some("resp-auto-2")
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_uses_session_history_and_persists_new_turn() {
+        let model = Arc::new(SessionCaptureModel::default());
+        let provider = Arc::new(SessionCaptureProvider {
+            model: model.clone(),
+        });
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![InputItem::from("history")])
+            .await
+            .expect("history should be stored");
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect("session-backed run should succeed");
+
+        let seen_inputs = model.seen_inputs.lock().expect("session seen inputs lock");
+        assert_eq!(seen_inputs.len(), 1);
+        assert_eq!(seen_inputs[0][0].as_text(), Some("history"));
+        assert_eq!(seen_inputs[0][1].as_text(), Some("hello"));
+        drop(seen_inputs);
+
+        let persisted = session
+            .get_items()
+            .await
+            .expect("session items should load");
+        assert_eq!(persisted.len(), 3);
+        assert_eq!(persisted[0].as_text(), Some("history"));
+        assert_eq!(persisted[1].as_text(), Some("hello"));
+        assert_eq!(persisted[2].as_text(), Some("session-ok"));
+        assert_eq!(result.final_output.as_deref(), Some("session-ok"));
+        assert_eq!(
+            result
+                .durable_state()
+                .map(|state| state.persisted_item_count),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_rejects_session_persistence_with_conversation_settings() {
+        let session = MemorySession::new("session");
+        let agent = Agent::builder("assistant").build();
+        let error = Runner::new()
+            .with_config(RunConfig {
+                previous_response_id: Some("resp_123".to_owned()),
+                ..RunConfig::default()
+            })
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect_err("session with previous response id should fail");
+
+        assert!(matches!(error, AgentsError::User(_)));
     }
 }

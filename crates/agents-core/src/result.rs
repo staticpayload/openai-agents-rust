@@ -28,6 +28,9 @@ pub struct RunResult {
     pub interruptions: Vec<RunInterruption>,
     pub usage: Usage,
     pub trace: Option<Trace>,
+    pub conversation_id: Option<String>,
+    pub previous_response_id: Option<String>,
+    pub auto_previous_response_id: bool,
 }
 
 impl RunResult {
@@ -48,6 +51,14 @@ impl RunResult {
     pub fn durable_state(&self) -> Option<&RunState> {
         self.run_state.as_ref()
     }
+
+    pub fn conversation_id(&self) -> Option<&str> {
+        self.conversation_id.as_deref()
+    }
+
+    pub fn previous_response_id(&self) -> Option<&str> {
+        self.previous_response_id.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -55,7 +66,9 @@ mod tests {
     use serde_json::json;
 
     use crate::items::OutputItem;
+    use crate::model::ModelResponse;
     use crate::run_context::RunContext;
+    use crate::usage::Usage;
 
     use super::*;
 
@@ -125,5 +138,27 @@ mod tests {
         };
 
         assert!(result.durable_state().is_some());
+    }
+
+    #[test]
+    fn exposes_conversation_metadata_and_response_replay() {
+        let result = RunResult {
+            conversation_id: Some("conv_123".to_owned()),
+            previous_response_id: Some("resp_123".to_owned()),
+            ..RunResult::default()
+        };
+        let response = ModelResponse {
+            output: vec![OutputItem::Reasoning {
+                text: "thinking".to_owned(),
+            }],
+            usage: Usage::default(),
+            model: Some("gpt-5".to_owned()),
+            response_id: Some("resp_123".to_owned()),
+            request_id: Some("req_123".to_owned()),
+        };
+
+        assert_eq!(result.conversation_id(), Some("conv_123"));
+        assert_eq!(result.previous_response_id(), Some("resp_123"));
+        assert_eq!(response.to_input_items().len(), 1);
     }
 }

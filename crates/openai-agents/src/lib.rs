@@ -1,11 +1,18 @@
 //! Public facade for the Rust port of the OpenAI Agents SDK.
 
 pub use agents_core::{
-    Agent, AgentBuilder, AgentsError, ApplyPatchOperation, ApplyPatchResult, Computer,
-    DebugSettings, Editor, Handoff, InputGuardrail, InputItem, MemorySession, Model, ModelProvider,
-    ModelRequest, ModelResponse, OutputGuardrail, OutputItem, Result, RunConfig, RunContext,
-    RunResult, RunState, Runner, SdkConfig, Session, Span, StaticTool, Tool, ToolDefinition, Trace,
-    Usage, VERSION, apply_diff, run,
+    Agent, AgentBuilder, AgentsError, ApplyPatchOperation, ApplyPatchResult,
+    CURRENT_RUN_STATE_SCHEMA_VERSION, Computer, DebugSettings, DocstringStyle, Editor,
+    FunctionSchema, FunctionTool, FunctionToolResult, GuardrailFunctionOutput, Handoff,
+    InputGuardrail, InputGuardrailResult, InputItem, MemorySession, Model, ModelProvider,
+    ModelRequest, ModelResponse, OutputGuardrail, OutputGuardrailResult, OutputItem, Result,
+    RunConfig, RunContext, RunInterruption, RunInterruptionKind, RunResult, RunState, Runner,
+    SdkConfig, Session, Span, StaticTool, Tool, ToolCall, ToolContext, ToolDefinition,
+    ToolGuardrailBehavior, ToolGuardrailFunctionOutput, ToolInputGuardrail, ToolInputGuardrailData,
+    ToolInputGuardrailResult, ToolOutput, ToolOutputFileContent, ToolOutputGuardrail,
+    ToolOutputGuardrailData, ToolOutputGuardrailResult, ToolOutputImage, ToolOutputText, Trace,
+    Usage, VERSION, apply_diff, function_tool, input_guardrail, output_guardrail, run,
+    tool_input_guardrail, tool_output_guardrail,
 };
 pub use agents_openai::{
     OpenAIApi, OpenAIChatCompletionsModel, OpenAIConversationsSession, OpenAIProvider,

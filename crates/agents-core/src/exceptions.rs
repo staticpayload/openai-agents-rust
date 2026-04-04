@@ -2,6 +2,9 @@ use std::fmt;
 
 use thiserror::Error;
 
+use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
+use crate::tool_guardrails::ToolGuardrailFunctionOutput;
+
 /// Collected data attached to runtime failures.
 #[derive(Clone, Debug, Default)]
 pub struct RunErrorDetails {
@@ -45,8 +48,28 @@ pub struct ToolTimeoutError {
     pub timeout_seconds: f64,
 }
 
-#[derive(Debug, Error)]
-#[error("input guardrail triggered: {guardrail_name}")]
+#[derive(Clone, Debug, Error)]
+#[error("input guardrail triggered: {}", guardrail_result.guardrail_name)]
 pub struct InputGuardrailTripwireTriggered {
+    pub guardrail_result: InputGuardrailResult,
+}
+
+#[derive(Clone, Debug, Error)]
+#[error("output guardrail triggered: {}", guardrail_result.guardrail_name)]
+pub struct OutputGuardrailTripwireTriggered {
+    pub guardrail_result: OutputGuardrailResult,
+}
+
+#[derive(Clone, Debug, Error)]
+#[error("tool input guardrail triggered: {guardrail_name}")]
+pub struct ToolInputGuardrailTripwireTriggered {
     pub guardrail_name: String,
+    pub output: ToolGuardrailFunctionOutput,
+}
+
+#[derive(Clone, Debug, Error)]
+#[error("tool output guardrail triggered: {guardrail_name}")]
+pub struct ToolOutputGuardrailTripwireTriggered {
+    pub guardrail_name: String,
+    pub output: ToolGuardrailFunctionOutput,
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,7 +15,7 @@ pub struct RunContext {
 }
 
 /// Approval state recorded during a run.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ApprovalRecord {
     pub approved: bool,
     pub reason: Option<String>,

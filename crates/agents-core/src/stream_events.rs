@@ -1,15 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agent::Agent;
-use crate::items::{InputItem, OutputItem};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum RunItem {
-    Input(InputItem),
-    Output(OutputItem),
-    ToolCall { name: String },
-    Handoff { target: String },
-}
+use crate::items::RunItem;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RawResponsesStreamEvent {

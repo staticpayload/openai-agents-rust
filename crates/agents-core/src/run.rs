@@ -163,6 +163,9 @@ impl Runner {
         run_state.current_turn = raw_responses.len();
         run_state.set_current_agent(current_agent.clone());
         run_state.set_trace(trace.clone());
+        run_state.conversation_id = self.config.conversation_id.clone();
+        run_state.previous_response_id = self.config.previous_response_id.clone();
+        run_state.auto_previous_response_id = self.config.auto_previous_response_id;
         run_state.extend_generated_items(generated_items.clone());
         run_state.extend_session_items(generated_items.clone());
         for result in input_guardrail_results.iter().cloned() {
@@ -221,6 +224,13 @@ impl Runner {
         if let Some(trace) = &state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
+        if resumed_config.previous_response_id.is_none() {
+            resumed_config.previous_response_id = state.previous_response_id.clone();
+        }
+        if resumed_config.conversation_id.is_none() {
+            resumed_config.conversation_id = state.conversation_id.clone();
+        }
+        resumed_config.auto_previous_response_id |= state.auto_previous_response_id;
 
         let runner = Self {
             model_provider: self.model_provider.clone(),
@@ -331,6 +341,13 @@ impl Runner {
         if let Some(trace) = &continued_state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
+        if resumed_config.previous_response_id.is_none() {
+            resumed_config.previous_response_id = continued_state.previous_response_id.clone();
+        }
+        if resumed_config.conversation_id.is_none() {
+            resumed_config.conversation_id = continued_state.conversation_id.clone();
+        }
+        resumed_config.auto_previous_response_id |= continued_state.auto_previous_response_id;
 
         let runner = Self {
             model_provider: self.model_provider.clone(),
@@ -386,6 +403,8 @@ impl Runner {
                 trace_id: Some(trace_id),
                 model: agent.model.clone(),
                 instructions: agent.instructions.clone(),
+                previous_response_id: self.config.previous_response_id.clone(),
+                conversation_id: self.config.conversation_id.clone(),
                 input: prepared_input.to_vec(),
                 tools: agent.tool_definitions(),
             };
@@ -801,6 +820,45 @@ mod tests {
     }
 
     #[derive(Clone, Default)]
+    struct RequestCaptureModel {
+        previous_response_id: Arc<Mutex<Option<String>>>,
+        conversation_id: Arc<Mutex<Option<String>>>,
+    }
+
+    #[async_trait]
+    impl Model for RequestCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            *self
+                .previous_response_id
+                .lock()
+                .expect("request capture previous response id lock") =
+                request.previous_response_id.clone();
+            *self
+                .conversation_id
+                .lock()
+                .expect("request capture conversation id lock") = request.conversation_id.clone();
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "ok".to_owned(),
+                }],
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    struct RequestCaptureProvider {
+        model: Arc<RequestCaptureModel>,
+    }
+
+    impl ModelProvider for RequestCaptureProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
     struct FakeHandoffModel {
         calls: Arc<Mutex<usize>>,
     }
@@ -1137,5 +1195,56 @@ mod tests {
                 RunItem::HandoffOutput { source_agent } if source_agent == "assistant"
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn runner_passes_conversation_tracking_to_model_requests() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(RequestCaptureProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                previous_response_id: Some("resp_123".to_owned()),
+                conversation_id: Some("conv_123".to_owned()),
+                ..RunConfig::default()
+            });
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("ok"));
+        assert_eq!(
+            model
+                .previous_response_id
+                .lock()
+                .expect("previous response capture lock")
+                .as_deref(),
+            Some("resp_123")
+        );
+        assert_eq!(
+            model
+                .conversation_id
+                .lock()
+                .expect("conversation capture lock")
+                .as_deref(),
+            Some("conv_123")
+        );
+        assert_eq!(
+            result
+                .durable_state()
+                .and_then(|state| state.previous_response_id.as_deref()),
+            Some("resp_123")
+        );
+        assert_eq!(
+            result
+                .durable_state()
+                .and_then(|state| state.conversation_id.as_deref()),
+            Some("conv_123")
+        );
     }
 }

@@ -15,12 +15,14 @@ pub use agents_core::{
     tool_input_guardrail, tool_output_guardrail,
 };
 pub use agents_openai::{
-    OpenAIApi, OpenAIChatCompletionsModel, OpenAIConversationsSession, OpenAIProvider,
+    OPENAI_DEFAULT_BASE_URL, OPENAI_DEFAULT_WEBSOCKET_BASE_URL, OpenAIApi,
+    OpenAIChatCompletionsModel, OpenAIClientOptions, OpenAIConversationsSession, OpenAIProvider,
     OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession, OpenAIResponsesModel,
-    OpenAIResponsesWsModel, ResponsesWebSocketSession, code_interpreter_tool, default_openai_api,
-    default_openai_key, file_search_tool, image_generation_tool, set_default_openai_api,
-    set_default_openai_key, set_tracing_export_api_key, tool_search_tool, tracing_export_api_key,
-    web_search_tool,
+    OpenAIResponsesTransport, OpenAIResponsesWsModel, ResponsesWebSocketSession,
+    code_interpreter_tool, default_openai_api, default_openai_base_url, default_openai_key,
+    default_openai_websocket_base_url, file_search_tool, image_generation_tool,
+    responses_websocket_session, set_default_openai_api, set_default_openai_key,
+    set_tracing_export_api_key, tool_search_tool, tracing_export_api_key, web_search_tool,
 };
 
 pub mod realtime {

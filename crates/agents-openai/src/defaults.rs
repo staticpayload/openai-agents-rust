@@ -2,6 +2,9 @@ use std::sync::RwLock;
 
 use once_cell::sync::Lazy;
 
+pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_DEFAULT_WEBSOCKET_BASE_URL: &str = "wss://api.openai.com/v1";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum OpenAIApi {
     ChatCompletions,
@@ -52,4 +55,26 @@ pub fn set_default_openai_api(api: OpenAIApi) {
 
 pub fn default_openai_api() -> OpenAIApi {
     SETTINGS.read().expect("openai defaults lock").api
+}
+
+pub fn default_openai_base_url() -> &'static str {
+    OPENAI_DEFAULT_BASE_URL
+}
+
+pub fn default_openai_websocket_base_url() -> &'static str {
+    OPENAI_DEFAULT_WEBSOCKET_BASE_URL
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exposes_default_endpoints() {
+        assert_eq!(default_openai_base_url(), OPENAI_DEFAULT_BASE_URL);
+        assert_eq!(
+            default_openai_websocket_base_url(),
+            OPENAI_DEFAULT_WEBSOCKET_BASE_URL
+        );
+    }
 }

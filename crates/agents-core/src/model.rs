@@ -16,6 +16,8 @@ pub struct ModelRequest {
     pub trace_id: Option<Uuid>,
     pub model: Option<String>,
     pub instructions: Option<String>,
+    pub previous_response_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub input: Vec<InputItem>,
     pub tools: Vec<ToolDefinition>,
 }

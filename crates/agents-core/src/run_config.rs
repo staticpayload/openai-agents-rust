@@ -45,6 +45,9 @@ pub struct RunConfig {
     pub workflow_name: String,
     pub trace_id: Option<String>,
     pub group_id: Option<String>,
+    pub previous_response_id: Option<String>,
+    pub auto_previous_response_id: bool,
+    pub conversation_id: Option<String>,
     pub reasoning_item_id_policy: ReasoningItemIdPolicy,
 }
 
@@ -58,6 +61,9 @@ impl Default for RunConfig {
             workflow_name: "Agent workflow".to_owned(),
             trace_id: None,
             group_id: None,
+            previous_response_id: None,
+            auto_previous_response_id: false,
+            conversation_id: None,
             reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
         }
     }

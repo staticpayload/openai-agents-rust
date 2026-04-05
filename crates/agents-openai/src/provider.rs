@@ -28,7 +28,7 @@ pub struct OpenAIProvider {
     pub project: Option<String>,
     pub api: Option<OpenAIApi>,
     pub use_responses: Option<bool>,
-    pub use_responses_websocket: bool,
+    pub use_responses_websocket: Option<bool>,
     websocket_model_cache: Arc<Mutex<HashMap<String, Arc<OpenAIResponsesWsModel>>>>,
 }
 
@@ -73,7 +73,7 @@ impl OpenAIProvider {
     }
 
     pub fn with_use_responses_websocket(mut self, use_responses_websocket: bool) -> Self {
-        self.use_responses_websocket = use_responses_websocket;
+        self.use_responses_websocket = Some(use_responses_websocket);
         self
     }
 
@@ -97,6 +97,8 @@ impl OpenAIProvider {
             } else {
                 OpenAIApi::ChatCompletions
             }
+        } else if let Some(api) = self.api {
+            api
         } else if let Some(use_responses_by_default) = get_use_responses_by_default() {
             if use_responses_by_default {
                 OpenAIApi::Responses
@@ -104,12 +106,18 @@ impl OpenAIProvider {
                 OpenAIApi::ChatCompletions
             }
         } else {
-            self.api.unwrap_or_else(default_openai_api)
+            default_openai_api()
         }
     }
 
     pub fn responses_transport(&self) -> OpenAIResponsesTransport {
-        if self.use_responses_websocket || get_use_responses_websocket_by_default() == Some(true) {
+        if let Some(use_responses_websocket) = self.use_responses_websocket {
+            if use_responses_websocket {
+                OpenAIResponsesTransport::WebSocket
+            } else {
+                OpenAIResponsesTransport::Http
+            }
+        } else if get_use_responses_websocket_by_default() == Some(true) {
             OpenAIResponsesTransport::WebSocket
         } else {
             OpenAIResponsesTransport::Http
@@ -203,6 +211,21 @@ mod tests {
     }
 
     #[test]
+    fn explicit_api_override_wins_over_shared_default() {
+        set_use_responses_by_default(true);
+
+        let chat_provider = OpenAIProvider::new().with_api(OpenAIApi::ChatCompletions);
+        assert_eq!(chat_provider.resolved_api(), OpenAIApi::ChatCompletions);
+
+        set_use_responses_by_default(false);
+
+        let responses_provider = OpenAIProvider::new().with_api(OpenAIApi::Responses);
+        assert_eq!(responses_provider.resolved_api(), OpenAIApi::Responses);
+
+        set_use_responses_by_default(true);
+    }
+
+    #[test]
     fn honors_shared_default_websocket_transport_preference() {
         set_use_responses_websocket_by_default(true);
 
@@ -215,6 +238,29 @@ mod tests {
         );
 
         set_use_responses_websocket_by_default(false);
+    }
+
+    #[test]
+    fn explicit_transport_override_wins_over_shared_default() {
+        set_use_responses_websocket_by_default(true);
+
+        let http_provider = OpenAIProvider::new()
+            .with_use_responses(true)
+            .with_use_responses_websocket(false);
+        assert_eq!(
+            http_provider.responses_transport(),
+            OpenAIResponsesTransport::Http
+        );
+
+        set_use_responses_websocket_by_default(false);
+
+        let websocket_provider = OpenAIProvider::new()
+            .with_use_responses(true)
+            .with_use_responses_websocket(true);
+        assert_eq!(
+            websocket_provider.responses_transport(),
+            OpenAIResponsesTransport::WebSocket
+        );
     }
 
     #[test]

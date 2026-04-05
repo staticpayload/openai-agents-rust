@@ -13,6 +13,7 @@ use crate::tool_guardrails::{
 use crate::tracing::{SpanData, function_span, get_trace_provider};
 
 use super::approvals::append_approval_error_output;
+use super::streaming::StreamRecorder;
 
 pub(crate) struct ToolExecutionOutcome {
     pub new_items: Vec<RunItem>,
@@ -27,6 +28,7 @@ pub(crate) async fn execute_local_function_tools(
     run_config: &RunConfig,
     context: &RunContextWrapper,
     tool_calls: Vec<ToolCall>,
+    stream_recorder: Option<&StreamRecorder>,
 ) -> Result<ToolExecutionOutcome> {
     let runtime_tools = agent.get_all_function_tools(context).await?;
     let mut new_items = Vec::new();
@@ -58,6 +60,18 @@ pub(crate) async fn execute_local_function_tools(
             Some(tool_call.arguments.clone()),
             None,
         );
+        if let Some(recorder) = stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "tool_start",
+                    Some(serde_json::json!({
+                        "tool_name": tool_call.name.clone(),
+                        "call_id": tool_call.id.clone(),
+                        "namespace": tool_call.namespace.clone(),
+                    })),
+                )
+                .await;
+        }
         if let Some(hooks) = &run_config.run_hooks {
             hooks
                 .on_tool_start(context, agent, &function_tool.definition)
@@ -74,6 +88,18 @@ pub(crate) async fn execute_local_function_tools(
             match context.approvals.get(&tool_call.id) {
                 None => {
                     provider.finish_span(&mut span, true);
+                    if let Some(recorder) = stream_recorder {
+                        recorder
+                            .push_lifecycle(
+                                "tool_approval_required",
+                                Some(serde_json::json!({
+                                    "tool_name": tool_call.name.clone(),
+                                    "call_id": tool_call.id.clone(),
+                                    "namespace": tool_call.namespace.clone(),
+                                })),
+                            )
+                            .await;
+                    }
                     interruptions.push(RunInterruption {
                         kind: Some(RunInterruptionKind::ToolApproval),
                         call_id: Some(tool_call.id.clone()),
@@ -226,6 +252,14 @@ pub(crate) async fn execute_local_function_tools(
             call_id: Some(tool_call.id),
             namespace: tool_call.namespace,
         };
+        let lifecycle_tool_name = match &run_item {
+            RunItem::ToolCallOutput { tool_name, .. } => tool_name.clone(),
+            _ => String::new(),
+        };
+        let lifecycle_call_id = match &run_item {
+            RunItem::ToolCallOutput { call_id, .. } => call_id.clone(),
+            _ => None,
+        };
         let output_text = serde_json::to_string(&output).ok();
         new_items.push(run_item.clone());
         tool_results.push(FunctionToolResult {
@@ -271,6 +305,17 @@ pub(crate) async fn execute_local_function_tools(
             data.output = output_text;
         }
         provider.finish_span(&mut span, true);
+        if let Some(recorder) = stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "tool_end",
+                    Some(serde_json::json!({
+                        "tool_name": lifecycle_tool_name,
+                        "call_id": lifecycle_call_id,
+                    })),
+                )
+                .await;
+        }
     }
 
     Ok(ToolExecutionOutcome {

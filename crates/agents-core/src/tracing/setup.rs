@@ -44,7 +44,7 @@ pub fn flush_traces() {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Mutex, OnceLock};
 
     use super::*;
     use crate::tracing::TracingProcessor;
@@ -119,8 +119,14 @@ mod tests {
         }
     }
 
+    fn provider_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
     #[test]
     fn replaces_global_provider() {
+        let _guard = provider_test_lock().lock().expect("provider test lock");
         let provider = Arc::new(DummyProvider::default());
         let provider_trait: Arc<dyn TraceProvider> = provider.clone();
         set_trace_provider(provider_trait);
@@ -133,6 +139,7 @@ mod tests {
 
     #[test]
     fn forwards_disable_and_flush_to_provider() {
+        let _guard = provider_test_lock().lock().expect("provider test lock");
         let provider = Arc::new(DummyProvider::default());
         let provider_trait: Arc<dyn TraceProvider> = provider.clone();
         set_trace_provider(provider_trait);

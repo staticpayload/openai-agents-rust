@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent::Agent;
 use crate::items::RunItem;
@@ -39,8 +40,21 @@ impl AgentUpdatedStreamEvent {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RunLifecycleStreamEvent {
+    pub name: String,
+    pub data: Option<Value>,
+}
+
+impl RunLifecycleStreamEvent {
+    pub fn event_type(&self) -> &'static str {
+        "run_lifecycle_event"
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum StreamEvent {
     RawResponseEvent(RawResponsesStreamEvent),
     RunItemEvent(RunItemStreamEvent),
     AgentUpdated(AgentUpdatedStreamEvent),
+    Lifecycle(RunLifecycleStreamEvent),
 }

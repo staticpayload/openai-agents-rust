@@ -45,11 +45,12 @@ pub async fn run_demo_loop(agent: &Agent, stream: bool, max_turns: usize) -> Res
                 .run_items_streamed(&current_agent, input_items.clone())
                 .await?;
             consume_streamed_result(&result).await;
-            current_agent = result
-                .current_agent
+            let final_result = result.wait_for_completion().await?;
+            current_agent = final_result
+                .last_agent
                 .clone()
                 .unwrap_or_else(|| current_agent.clone());
-            input_items = result.to_input_list();
+            input_items = final_result.to_input_list();
         } else {
             let result = Runner::new()
                 .with_config(crate::run_config::RunConfig {
@@ -86,12 +87,14 @@ async fn consume_streamed_result(result: &RunResultStreaming) {
             StreamEvent::AgentUpdated(event) => {
                 println!("[Agent updated: {}]", event.new_agent.name)
             }
-            StreamEvent::RawResponseEvent(_) => {}
+            StreamEvent::RawResponseEvent(_) | StreamEvent::Lifecycle(_) => {}
         }
     }
 
-    if let Some(final_output) = &result.final_output {
-        println!("{final_output}");
+    if let Ok(final_result) = result.wait_for_completion().await {
+        if let Some(final_output) = &final_result.final_output {
+            println!("{final_output}");
+        }
     }
 }
 

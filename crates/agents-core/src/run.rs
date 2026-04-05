@@ -13,7 +13,7 @@ use crate::internal::items as internal_items;
 use crate::internal::model_retry as internal_model_retry;
 use crate::internal::oai_conversation as internal_oai_conversation;
 use crate::internal::session_persistence as internal_session_persistence;
-use crate::internal::streaming as internal_streaming;
+use crate::internal::streaming::StreamRecorder;
 use crate::internal::tool_execution as internal_tool_execution;
 use crate::internal::turn_preparation as internal_turn_preparation;
 use crate::internal::turn_resolution as internal_turn_resolution;
@@ -173,31 +173,10 @@ impl Runner {
         options: RunOptions,
     ) -> Result<RunResult> {
         let resolved = self.resolve_run_call(options);
-        if let Some(session) = resolved.session {
-            resolved
-                .runner
-                .run_items_with_session_and_context(
-                    agent,
-                    input,
-                    session.as_ref(),
-                    resolved.context.unwrap_or_else(|| {
-                        crate::run_context::RunContextWrapper::new(
-                            crate::run_context::RunContext::default(),
-                        )
-                    }),
-                )
-                .await
-        } else if let Some(context) = resolved.context {
-            resolved
-                .runner
-                .run_items_with_context(agent, input, context)
-                .await
-        } else {
-            resolved
-                .runner
-                .run_items_internal(agent, input.clone(), input, None, None)
-                .await
-        }
+        resolved
+            .runner
+            .run_resolved_items(agent, input, resolved.session, resolved.context, None)
+            .await
     }
 
     pub async fn run_streamed(
@@ -217,40 +196,21 @@ impl Runner {
     ) -> Result<RunResultStreaming> {
         let resolved = self.resolve_run_call(options);
         let max_turns = resolved.runner.config.max_turns;
-        let result = if let Some(session) = resolved.session {
-            resolved
-                .runner
-                .run_items_with_session_and_context(
-                    agent,
-                    input,
-                    session.as_ref(),
-                    resolved.context.unwrap_or_else(|| {
-                        crate::run_context::RunContextWrapper::new(
-                            crate::run_context::RunContext::default(),
-                        )
-                    }),
-                )
-                .await?
-        } else if let Some(context) = resolved.context {
-            resolved
-                .runner
-                .run_items_with_context(agent, input, context)
-                .await?
-        } else {
-            resolved
-                .runner
-                .run_items_internal(agent, input.clone(), input, None, None)
-                .await?
-        };
-        let current_turn = result.raw_responses.len();
-        let events = internal_streaming::result_to_stream_events(agent, &result);
+        let recorder = StreamRecorder::new();
+        let shared_state = recorder.shared_state();
+        let runner = resolved.runner.clone();
+        let agent = agent.clone();
+        let session = resolved.session;
+        let context = resolved.context;
 
-        Ok(RunResultStreaming::from_run_result(
-            result,
-            current_turn,
-            max_turns,
-            events,
-        ))
+        tokio::spawn(async move {
+            let result = runner
+                .run_resolved_items(&agent, input, session, context, Some(recorder.clone()))
+                .await;
+            recorder.complete(result).await;
+        });
+
+        Ok(RunResultStreaming::from_live(max_turns, shared_state))
     }
 
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
@@ -298,7 +258,7 @@ impl Runner {
         input: Vec<InputItem>,
         context: crate::run_context::RunContextWrapper,
     ) -> Result<RunResult> {
-        self.run_items_internal(agent, input.clone(), input, None, Some(context))
+        self.run_items_internal(agent, input.clone(), input, None, Some(context), None)
             .await
     }
 
@@ -308,6 +268,110 @@ impl Runner {
         input: Vec<InputItem>,
         session: &(dyn Session + Sync),
         context: crate::run_context::RunContextWrapper,
+    ) -> Result<RunResult> {
+        self.run_items_with_session_and_context_internal(agent, input, session, context, None)
+            .await
+    }
+
+    pub(crate) async fn run_items_streamed_with_context(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        context: crate::run_context::RunContextWrapper,
+    ) -> Result<RunResultStreaming> {
+        let recorder = StreamRecorder::new();
+        let shared_state = recorder.shared_state();
+        let runner = self.clone();
+        let agent = agent.clone();
+
+        tokio::spawn(async move {
+            let result = runner
+                .run_items_internal(
+                    &agent,
+                    input.clone(),
+                    input,
+                    None,
+                    Some(context),
+                    Some(recorder.clone()),
+                )
+                .await;
+            recorder.complete(result).await;
+        });
+
+        Ok(RunResultStreaming::from_live(
+            self.config.max_turns,
+            shared_state,
+        ))
+    }
+
+    pub(crate) async fn run_items_streamed_with_session_and_context(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        session: Arc<dyn Session + Sync>,
+        context: crate::run_context::RunContextWrapper,
+    ) -> Result<RunResultStreaming> {
+        let recorder = StreamRecorder::new();
+        let shared_state = recorder.shared_state();
+        let runner = self.clone();
+        let agent = agent.clone();
+
+        tokio::spawn(async move {
+            let result = runner
+                .run_items_with_session_and_context_internal(
+                    &agent,
+                    input,
+                    session.as_ref(),
+                    context,
+                    Some(recorder.clone()),
+                )
+                .await;
+            recorder.complete(result).await;
+        });
+
+        Ok(RunResultStreaming::from_live(
+            self.config.max_turns,
+            shared_state,
+        ))
+    }
+
+    async fn run_resolved_items(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        session: Option<Arc<dyn Session + Sync>>,
+        context: Option<crate::run_context::RunContextWrapper>,
+        recorder: Option<StreamRecorder>,
+    ) -> Result<RunResult> {
+        if let Some(session) = session {
+            self.run_items_with_session_and_context_internal(
+                agent,
+                input,
+                session.as_ref(),
+                context.unwrap_or_else(|| {
+                    crate::run_context::RunContextWrapper::new(
+                        crate::run_context::RunContext::default(),
+                    )
+                }),
+                recorder,
+            )
+            .await
+        } else if let Some(context) = context {
+            self.run_items_internal(agent, input.clone(), input, None, Some(context), recorder)
+                .await
+        } else {
+            self.run_items_internal(agent, input.clone(), input, None, None, recorder)
+                .await
+        }
+    }
+
+    async fn run_items_with_session_and_context_internal(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        session: &(dyn Session + Sync),
+        context: crate::run_context::RunContextWrapper,
+        recorder: Option<StreamRecorder>,
     ) -> Result<RunResult> {
         internal_agent_runner_helpers::validate_session_conversation_settings(&self.config)?;
         let (prepared_input, original_input) =
@@ -323,6 +387,7 @@ impl Runner {
             prepared_input,
             Some(session),
             Some(context),
+            recorder,
         )
         .await
     }
@@ -334,6 +399,7 @@ impl Runner {
         base_input: Vec<InputItem>,
         session: Option<&(dyn Session + Sync)>,
         context_override: Option<crate::run_context::RunContextWrapper>,
+        stream_recorder: Option<StreamRecorder>,
     ) -> Result<RunResult> {
         internal_turn_preparation::validate_run_hooks()?;
 
@@ -380,6 +446,17 @@ impl Runner {
             0,
         )
         .await;
+        if let Some(recorder) = &stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "agent_start",
+                    Some(serde_json::json!({
+                        "agent_name": agent.name.clone(),
+                        "turn": 0,
+                    })),
+                )
+                .await;
+        }
 
         let all_input_guardrails = merged_input_guardrails(agent, &self.config);
         let input_guardrail_results = internal_guardrails::run_input_guardrails(
@@ -389,6 +466,16 @@ impl Runner {
             &context,
         )
         .await?;
+        if let Some(recorder) = &stream_recorder {
+            recorder
+                .push_lifecycle(
+                    "input_guardrails_completed",
+                    Some(serde_json::json!({
+                        "count": input_guardrail_results.len(),
+                    })),
+                )
+                .await;
+        }
 
         let mut current_agent = agent.clone();
         let mut current_input_history = base_input;
@@ -406,6 +493,17 @@ impl Runner {
             internal_oai_conversation::OpenAIServerConversationTracker::new(&self.config);
 
         for _turn in 0..self.config.max_turns {
+            if let Some(recorder) = &stream_recorder {
+                recorder
+                    .push_lifecycle(
+                        "turn_started",
+                        Some(serde_json::json!({
+                            "agent_name": current_agent.name.clone(),
+                            "turn": raw_responses.len(),
+                        })),
+                    )
+                    .await;
+            }
             let prepared_input = internal_items::prepare_model_input_items(
                 &current_input_history,
                 &normalized_generated_items,
@@ -438,6 +536,10 @@ impl Runner {
 
             let output = response.output.clone();
             let response_items = internal_turn_resolution::build_message_output_items(&output);
+            if let Some(recorder) = &stream_recorder {
+                recorder.push_raw_response(&response).await;
+                recorder.push_run_items(&response_items).await;
+            }
             raw_responses.push(response);
 
             if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
@@ -457,9 +559,23 @@ impl Runner {
                 provider.start_span(&mut span, true);
                 provider.finish_span(&mut span, true);
                 let mut step_items = response_items;
-                step_items.push(RunItem::HandoffOutput {
+                let handoff_output = RunItem::HandoffOutput {
                     source_agent: current_agent.name.clone(),
-                });
+                };
+                step_items.push(handoff_output.clone());
+                if let Some(recorder) = &stream_recorder {
+                    recorder
+                        .push_lifecycle(
+                            "handoff",
+                            Some(serde_json::json!({
+                                "from_agent": current_agent.name.clone(),
+                                "to_agent": target_agent.name.clone(),
+                            })),
+                        )
+                        .await;
+                    recorder.push_run_items(&[handoff_output]).await;
+                    recorder.push_agent_updated(&target_agent).await;
+                }
                 let handoff_transition = apply_handoff_transition(
                     &self.config,
                     &handoff,
@@ -482,6 +598,17 @@ impl Runner {
                     raw_responses.len(),
                 )
                 .await;
+                if let Some(recorder) = &stream_recorder {
+                    recorder
+                        .push_lifecycle(
+                            "agent_start",
+                            Some(serde_json::json!({
+                                "agent_name": current_agent.name.clone(),
+                                "turn": raw_responses.len(),
+                            })),
+                        )
+                        .await;
+                }
                 continue;
             }
             normalized_generated_items.extend(response_items.clone());
@@ -497,6 +624,16 @@ impl Runner {
                     &context,
                 )
                 .await?;
+                if let Some(recorder) = &stream_recorder {
+                    recorder
+                        .push_lifecycle(
+                            "output_guardrails_completed",
+                            Some(serde_json::json!({
+                                "count": output_guardrail_results.len(),
+                            })),
+                        )
+                        .await;
+                }
                 final_output = internal_turn_resolution::extract_final_output_text(&output);
                 final_output_items = output;
                 dispatch_agent_end(
@@ -508,6 +645,17 @@ impl Runner {
                     raw_responses.len(),
                 )
                 .await;
+                if let Some(recorder) = &stream_recorder {
+                    recorder
+                        .push_lifecycle(
+                            "agent_end",
+                            Some(serde_json::json!({
+                                "agent_name": current_agent.name.clone(),
+                                "final_output": final_output.clone(),
+                            })),
+                        )
+                        .await;
+                }
                 break;
             }
 
@@ -516,8 +664,12 @@ impl Runner {
                 &self.config,
                 &context,
                 tool_calls,
+                stream_recorder.as_ref(),
             )
             .await?;
+            if let Some(recorder) = &stream_recorder {
+                recorder.push_run_items(&tool_outcome.new_items).await;
+            }
             if tool_outcome.interruptions.is_empty() {
                 let tool_final_output = current_agent
                     .tool_use_behavior
@@ -542,6 +694,17 @@ impl Runner {
                             raw_responses.len(),
                         )
                         .await;
+                        if let Some(recorder) = &stream_recorder {
+                            recorder
+                                .push_lifecycle(
+                                    "agent_end",
+                                    Some(serde_json::json!({
+                                        "agent_name": current_agent.name.clone(),
+                                        "final_output": final_output.clone(),
+                                    })),
+                                )
+                                .await;
+                        }
                         break;
                     }
                 }
@@ -551,8 +714,36 @@ impl Runner {
             normalized_generated_items.extend(tool_outcome.new_items.clone());
             session_generated_items.extend(tool_outcome.new_items);
             if !tool_outcome.interruptions.is_empty() {
+                if let Some(recorder) = &stream_recorder {
+                    recorder
+                        .push_lifecycle(
+                            "run_interrupted",
+                            Some(serde_json::json!({
+                                "interruptions": tool_outcome.interruptions.iter().map(|item| {
+                                    serde_json::json!({
+                                        "call_id": item.call_id,
+                                        "tool_name": item.tool_name,
+                                        "reason": item.reason,
+                                    })
+                                }).collect::<Vec<_>>(),
+                            })),
+                        )
+                        .await;
+                }
                 interruptions = tool_outcome.interruptions;
                 break;
+            }
+
+            if let Some(recorder) = &stream_recorder {
+                recorder
+                    .push_lifecycle(
+                        "turn_completed",
+                        Some(serde_json::json!({
+                            "agent_name": current_agent.name.clone(),
+                            "turn": raw_responses.len(),
+                        })),
+                    )
+                    .await;
             }
         }
 
@@ -813,6 +1004,7 @@ impl Runner {
             &self.config,
             &context,
             vec![tool_call],
+            None,
         )
         .await?;
         if !tool_outcome.interruptions.is_empty() {
@@ -1375,6 +1567,7 @@ mod tests {
 
     use async_trait::async_trait;
     use futures::FutureExt;
+    use futures::StreamExt;
     use schemars::JsonSchema;
     use serde::Deserialize;
     use serde_json::{Value, json};
@@ -2511,20 +2704,21 @@ mod tests {
             .run_streamed(&agent, "hello")
             .await
             .expect("streamed run should succeed");
+        let events = streamed.stream_events().collect::<Vec<_>>().await;
         let final_result = streamed
-            .final_run_result
-            .as_ref()
-            .expect("streamed run should retain final result");
+            .wait_for_completion()
+            .await
+            .expect("streamed run should finish");
 
-        assert!(streamed.is_complete);
-        assert_eq!(streamed.current_turn, 2);
+        assert!(!streamed.is_complete);
+        assert_eq!(streamed.current_turn, 0);
         assert_eq!(
             final_result.final_output.as_deref(),
             Some("final:result:rust")
         );
+        assert_eq!(final_result.raw_responses.len(), 2);
         assert!(
-            streamed
-                .events
+            events
                 .iter()
                 .any(|event| matches!(event, crate::stream_events::StreamEvent::RunItemEvent(_)))
         );

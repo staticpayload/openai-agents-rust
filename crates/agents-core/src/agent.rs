@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use futures::FutureExt;
+use futures::StreamExt;
 use futures::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
@@ -527,57 +528,52 @@ impl Agent {
                 if on_stream.is_some() {
                     let mut streamed = if let Some(session) = &session {
                         runner
-                            .run_items_with_session_and_context(
+                            .run_items_streamed_with_session_and_context(
                                 &agent,
                                 nested_input.clone(),
-                                session.as_ref(),
+                                session.clone(),
                                 nested_context.clone(),
                             )
                             .await
-                            .map(|result| {
-                                RunResultStreaming::from_run_result(
-                                    result.clone(),
-                                    result.raw_responses.len(),
-                                    resolved_max_turns,
-                                    crate::internal::streaming::result_to_stream_events(
-                                        &agent, &result,
-                                    ),
-                                )
-                            })
                     } else {
                         runner
-                            .run_items_with_context(&agent, nested_input.clone(), nested_context)
+                            .run_items_streamed_with_context(
+                                &agent,
+                                nested_input.clone(),
+                                nested_context,
+                            )
                             .await
-                            .map(|result| {
-                                RunResultStreaming::from_run_result(
-                                    result.clone(),
-                                    result.raw_responses.len(),
-                                    resolved_max_turns,
-                                    crate::internal::streaming::result_to_stream_events(
-                                        &agent, &result,
-                                    ),
-                                )
-                            })
                     };
 
                     match streamed.as_mut() {
                         Ok(streamed) => {
+                            streamed.current_turn = 0;
+                            streamed.max_turns = resolved_max_turns;
                             streamed.agent_tool_invocation = Some(tool_invocation.clone());
-                            if let Some(result) = streamed.final_run_result.as_ref() {
-                                record_agent_tool_run_result(
-                                    tool_context.tool_call_id.clone(),
-                                    result.clone(),
-                                    state_scope.clone(),
-                                );
-                            }
                             if let Some(handler) = &on_stream {
-                                for event in streamed.events.clone() {
+                                let mut stream = Box::pin(streamed.stream_events());
+                                while let Some(event) = stream.next().await {
                                     handler(AgentToolStreamEvent {
                                         event,
                                         agent: agent.clone(),
                                         tool_call: tool_context.tool_call.clone(),
                                     })
                                     .await?;
+                                }
+                            }
+                            let completed = streamed.wait_for_completion().await;
+                            if let Ok(result) = &completed {
+                                record_agent_tool_run_result(
+                                    tool_context.tool_call_id.clone(),
+                                    result.clone(),
+                                    state_scope.clone(),
+                                );
+                            }
+                            if let Err(error) = completed {
+                                if let Some(formatter) = &failure_error_function {
+                                    if let Some(message) = formatter(error.to_string()).await {
+                                        return Ok(ToolOutput::from(message));
+                                    }
                                 }
                             }
                         }
@@ -594,11 +590,7 @@ impl Agent {
                     let extracted = if let Some(extractor) = &custom_output_extractor {
                         extractor(AgentToolRunResult::Streaming(streamed.clone())).await?
                     } else {
-                        streamed
-                            .final_run_result
-                            .as_ref()
-                            .map(default_agent_tool_output_text)
-                            .unwrap_or_default()
+                        default_agent_tool_output_text(&streamed.wait_for_completion().await?)
                     };
                     return Ok(ToolOutput::from(extracted));
                 }

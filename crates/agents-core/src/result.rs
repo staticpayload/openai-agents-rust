@@ -2,9 +2,11 @@ use futures::StreamExt;
 use futures::stream::{self, BoxStream};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 
 use crate::agent::Agent;
 use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
+use crate::internal::streaming::LiveRunStreamState;
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
 use crate::run_config::ReasoningItemIdPolicy;
@@ -133,6 +135,8 @@ pub struct RunResultStreaming {
     pub reasoning_item_id_policy: ReasoningItemIdPolicy,
     pub normalized_new_items: Option<Vec<RunItem>>,
     pub agent_tool_invocation: Option<AgentToolInvocation>,
+    #[serde(skip, default)]
+    shared_state: Option<Arc<LiveRunStreamState>>,
 }
 
 impl RunResultStreaming {
@@ -162,6 +166,28 @@ impl RunResultStreaming {
             normalized_new_items: result.normalized_new_items.clone(),
             agent_tool_invocation: result.agent_tool_invocation.clone(),
             final_run_result: Some(result),
+            shared_state: None,
+        }
+    }
+
+    pub(crate) fn from_live(max_turns: usize, shared_state: Arc<LiveRunStreamState>) -> Self {
+        Self {
+            current_agent: None,
+            current_turn: 0,
+            max_turns,
+            is_complete: false,
+            final_output: None,
+            normalized_input: None,
+            new_items: Vec::new(),
+            raw_responses: Vec::new(),
+            input_guardrail_results: Vec::new(),
+            output_guardrail_results: Vec::new(),
+            events: Vec::new(),
+            final_run_result: None,
+            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
+            normalized_new_items: None,
+            agent_tool_invocation: None,
+            shared_state: Some(shared_state),
         }
     }
 
@@ -196,7 +222,23 @@ impl RunResultStreaming {
     }
 
     pub fn stream_events(&self) -> BoxStream<'static, StreamEvent> {
-        stream::iter(self.events.clone()).boxed()
+        if let Some(shared_state) = &self.shared_state {
+            let shared_state = shared_state.clone();
+            futures::stream::unfold((shared_state, 0usize), |(shared_state, index)| async move {
+                loop {
+                    if let Some(event) = shared_state.event_at(index).await {
+                        return Some((event, (shared_state, index + 1)));
+                    }
+                    if shared_state.completion().await.is_some() {
+                        return None;
+                    }
+                    shared_state.wait_for_change().await;
+                }
+            })
+            .boxed()
+        } else {
+            stream::iter(self.events.clone()).boxed()
+        }
     }
 
     pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
@@ -208,6 +250,32 @@ impl RunResultStreaming {
             .as_ref()
             .and_then(RunResult::last_response)
             .or_else(|| self.raw_responses.last())
+    }
+
+    pub async fn wait_for_completion(&self) -> crate::errors::Result<RunResult> {
+        if let Some(result) = &self.final_run_result {
+            return Ok(result.clone());
+        }
+
+        let Some(shared_state) = &self.shared_state else {
+            return Ok(RunResult::default());
+        };
+
+        shared_state.wait_for_completion().await
+    }
+
+    pub async fn to_input_list_async(&self) -> crate::errors::Result<Vec<InputItem>> {
+        self.to_input_list_mode_async(ToInputListMode::PreserveAll)
+            .await
+    }
+
+    pub async fn to_input_list_mode_async(
+        &self,
+        mode: ToInputListMode,
+    ) -> crate::errors::Result<Vec<InputItem>> {
+        self.wait_for_completion()
+            .await
+            .map(|result| result.to_input_list_mode(mode))
     }
 }
 

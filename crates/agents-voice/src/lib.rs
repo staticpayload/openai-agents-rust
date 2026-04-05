@@ -42,17 +42,19 @@ pub use workflow::{
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
 
     #[tokio::test]
     async fn pipeline_runs_single_agent_workflow() {
-        let workflow = SingleAgentVoiceWorkflow::new(|_input| async move {
-            Ok(vec![VoiceStreamEvent::Lifecycle(
-                VoiceStreamEventLifecycle {
-                    event: "turn_ended".to_owned(),
-                },
-            )])
+        let workflow = SingleAgentVoiceWorkflow::new(
+            agents_core::Agent::builder("assistant")
+                .instructions("Be concise.")
+                .build(),
+        );
+        let pipeline = VoicePipeline::new(VoicePipelineConfig {
+            stream_audio: true,
+            ..VoicePipelineConfig::default()
         });
-        let pipeline = VoicePipeline::new(VoicePipelineConfig::default());
         let result = pipeline
             .run(
                 &workflow,
@@ -64,7 +66,29 @@ mod tests {
             .await
             .expect("pipeline should succeed");
 
-        assert_eq!(result.audio_chunks, 0);
-        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.audio_chunks, 1);
+        assert!(!result.events.is_empty());
+        assert_eq!(
+            result.transcript,
+            vec!["transcribed:audio/wav:3".to_owned()]
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_streams_text_from_core_runner() {
+        let workflow = SingleAgentVoiceWorkflow::new(
+            agents_core::Agent::builder("assistant")
+                .instructions("Be concise.")
+                .build(),
+        );
+        let chunks: Vec<String> = workflow
+            .run("hello".to_owned())
+            .collect::<Vec<_>>()
+            .await
+            .into_iter()
+            .collect::<agents_core::Result<Vec<_>>>()
+            .expect("workflow should stream text");
+
+        assert_eq!(chunks, vec!["hello".to_owned()]);
     }
 }

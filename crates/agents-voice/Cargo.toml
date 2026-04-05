@@ -10,6 +10,7 @@ authors.workspace = true
 agents-core = { path = "../agents-core" }
 agents-openai = { path = "../agents-openai" }
 async-trait.workspace = true
+futures.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

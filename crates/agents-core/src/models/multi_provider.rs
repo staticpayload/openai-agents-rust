@@ -255,4 +255,61 @@ mod tests {
         let seen = custom_capture.seen.lock().expect("seen lock");
         assert_eq!(seen.as_slice(), &[Some("router-model".to_owned())]);
     }
+
+    #[tokio::test]
+    async fn preserves_openai_prefix_as_literal_model_id_when_requested() {
+        let capture = Arc::new(CaptureModel::default());
+        let provider = MultiProvider::new(Arc::new(CaptureProvider::new(capture.clone())))
+            .with_openai_prefix_mode(MultiProviderOpenAIPrefixMode::ModelId);
+        let model = provider.resolve(Some("openai/gpt-5"));
+        model
+            .generate(ModelRequest::default())
+            .await
+            .expect("generation should succeed");
+
+        let seen = capture.seen.lock().expect("seen lock");
+        assert_eq!(seen.as_slice(), &[Some("openai/gpt-5".to_owned())]);
+    }
+
+    #[tokio::test]
+    async fn preserves_unknown_prefix_as_literal_model_id_when_requested() {
+        let capture = Arc::new(CaptureModel::default());
+        let provider = MultiProvider::new(Arc::new(CaptureProvider::new(capture.clone())))
+            .with_unknown_prefix_mode(MultiProviderUnknownPrefixMode::ModelId);
+        let model = provider.resolve(Some("openrouter/openai/gpt-5"));
+        model
+            .generate(ModelRequest::default())
+            .await
+            .expect("generation should succeed");
+
+        let seen = capture.seen.lock().expect("seen lock");
+        assert_eq!(
+            seen.as_slice(),
+            &[Some("openrouter/openai/gpt-5".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_provider_map_overrides_openai_prefix_mode() {
+        let default_capture = Arc::new(CaptureModel::default());
+        let custom_capture = Arc::new(CaptureModel::default());
+
+        let mut map = MultiProviderMap::default();
+        map.add_provider(
+            "openai",
+            Arc::new(CaptureProvider::new(custom_capture.clone())),
+        );
+
+        let provider = MultiProvider::new(Arc::new(CaptureProvider::new(default_capture)))
+            .with_provider_map(map)
+            .with_openai_prefix_mode(MultiProviderOpenAIPrefixMode::ModelId);
+        let model = provider.resolve(Some("openai/gpt-5"));
+        model
+            .generate(ModelRequest::default())
+            .await
+            .expect("generation should succeed");
+
+        let seen = custom_capture.seen.lock().expect("seen lock");
+        assert_eq!(seen.as_slice(), &[Some("gpt-5".to_owned())]);
+    }
 }

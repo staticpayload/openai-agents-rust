@@ -69,18 +69,32 @@ where
     }
 
     fn validate_json(&self, json: &str) -> std::result::Result<Value, ModelBehaviorError> {
+        let original: Value = serde_json::from_str(json).map_err(|error| ModelBehaviorError {
+            message: error.to_string(),
+        })?;
         let parsed: T = serde_json::from_str(json).map_err(|error| ModelBehaviorError {
             message: error.to_string(),
         })?;
-        serde_json::to_value(parsed).map_err(|error| ModelBehaviorError {
+        let normalized = serde_json::to_value(parsed).map_err(|error| ModelBehaviorError {
             message: error.to_string(),
-        })
+        })?;
+
+        if self.strict_json_schema && original != normalized {
+            return Err(ModelBehaviorError {
+                message: format!(
+                    "structured output did not match strict schema; original={original}, normalized={normalized}"
+                ),
+            });
+        }
+
+        Ok(normalized)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use serde::{Deserialize, Serialize};
+    use serde_json::json;
 
     use super::*;
 
@@ -96,5 +110,23 @@ mod tests {
             .validate_json(r#"{"answer":"ok"}"#)
             .expect("output should parse");
         assert_eq!(parsed["answer"], Value::String("ok".to_owned()));
+    }
+
+    #[test]
+    fn rejects_unknown_fields_for_strict_structured_output() {
+        let schema = AgentOutputSchema::<ExampleOutput>::new(true);
+        let error = schema
+            .validate_json(r#"{"answer":"ok","unexpected":true}"#)
+            .expect_err("strict structured output should reject unknown fields");
+        assert!(error.message.contains("unexpected"));
+    }
+
+    #[test]
+    fn non_strict_structured_output_allows_unknown_fields() {
+        let schema = AgentOutputSchema::<ExampleOutput>::new(false);
+        let parsed = schema
+            .validate_json(r#"{"answer":"ok","unexpected":true}"#)
+            .expect("non-strict structured output should allow unknown fields");
+        assert_eq!(parsed, json!({ "answer": "ok" }));
     }
 }

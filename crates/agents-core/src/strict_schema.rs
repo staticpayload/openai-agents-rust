@@ -28,6 +28,18 @@ fn ensure_node(node: &mut Value, root: &Value) -> std::result::Result<(), UserEr
         return Ok(());
     };
 
+    if let Some(Value::Object(defs)) = object.get_mut("$defs") {
+        for value in defs.values_mut() {
+            ensure_node(value, root)?;
+        }
+    }
+
+    if let Some(Value::Object(definitions)) = object.get_mut("definitions") {
+        for value in definitions.values_mut() {
+            ensure_node(value, root)?;
+        }
+    }
+
     if object.get("type").and_then(Value::as_str) == Some("object") {
         match object.get("additionalProperties") {
             None => {
@@ -85,6 +97,27 @@ fn ensure_node(node: &mut Value, root: &Value) -> std::result::Result<(), UserEr
         }
     }
 
+    if let Some(Value::Array(all_of)) = object.remove("allOf") {
+        if all_of.len() == 1 {
+            let mut merged = all_of.into_iter().next().unwrap_or(Value::Null);
+            ensure_node(&mut merged, root)?;
+            if let Some(merged_object) = merged.as_object() {
+                for (key, value) in merged_object {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+            ensure_node(node, root)?;
+            return Ok(());
+        }
+
+        let mut normalized = Vec::new();
+        for mut value in all_of {
+            ensure_node(&mut value, root)?;
+            normalized.push(value);
+        }
+        object.insert("allOf".to_owned(), Value::Array(normalized));
+    }
+
     if matches!(object.get("default"), Some(Value::Null)) {
         object.remove("default");
     }
@@ -137,5 +170,54 @@ mod tests {
         let strict = ensure_strict_json_schema(schema).expect("schema should normalize");
         assert_eq!(strict["additionalProperties"], Value::Bool(false));
         assert_eq!(strict["required"], json!(["name"]));
+    }
+
+    #[test]
+    fn merges_single_all_of_entry_into_parent() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [
+                {
+                    "properties": {
+                        "enabled": { "type": "boolean" }
+                    }
+                }
+            ]
+        });
+
+        let strict = ensure_strict_json_schema(schema).expect("schema should normalize");
+
+        assert!(strict.get("allOf").is_none());
+        assert_eq!(strict["additionalProperties"], Value::Bool(false));
+        assert_eq!(strict["required"], json!(["enabled"]));
+        assert_eq!(strict["properties"]["enabled"]["type"], json!("boolean"));
+    }
+
+    #[test]
+    fn expands_definition_refs_when_ref_has_siblings() {
+        let schema = json!({
+            "definitions": {
+                "refObj": {
+                    "type": "string",
+                    "default": null
+                }
+            },
+            "type": "object",
+            "properties": {
+                "value": {
+                    "$ref": "#/definitions/refObj",
+                    "description": "merged"
+                }
+            }
+        });
+
+        let strict = ensure_strict_json_schema(schema).expect("schema should normalize");
+
+        assert_eq!(strict["properties"]["value"]["type"], json!("string"));
+        assert_eq!(
+            strict["properties"]["value"]["description"],
+            json!("merged")
+        );
+        assert!(strict["properties"]["value"].get("default").is_none());
     }
 }

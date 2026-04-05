@@ -265,21 +265,13 @@ impl RunState {
     }
 
     pub fn resume_input(&self) -> Vec<InputItem> {
-        let mut input = self
-            .normalized_input
-            .clone()
-            .unwrap_or_else(|| self.original_input.clone());
-        input.extend(self.generated_items.iter().filter_map(|item| {
-            if matches!(
-                (item, self.reasoning_item_id_policy),
-                (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit)
-            ) {
-                None
-            } else {
-                item.to_input_item()
-            }
-        }));
-        input
+        crate::internal::items::compose_replay_input_items(
+            self.normalized_input
+                .as_deref()
+                .unwrap_or(&self.original_input),
+            &self.generated_items,
+            self.reasoning_item_id_policy,
+        )
     }
 
     pub fn to_json_string(&self) -> Result<String> {

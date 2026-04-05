@@ -559,7 +559,7 @@ impl Runner {
                 },
             )
             .await?;
-            if normalized_generated_items.is_empty() && model_data.input != prepared_input {
+            if model_data.input != prepared_input {
                 normalized_input_override = Some(model_data.input.clone());
             }
             let delivered_model_input = model_data.input.clone();
@@ -2706,6 +2706,114 @@ mod tests {
             .await
             .expect_err("streamed run should surface filter errors");
         assert!(error.to_string().contains("filter exploded"));
+    }
+
+    #[tokio::test]
+    async fn runner_preserves_multi_turn_filtered_history_in_normalized_replay_state() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                call_model_input_filter: Some(Arc::new(|mut data| {
+                    async move {
+                        if data.model_data.input.len() > 1 {
+                            data.model_data.input[0] = InputItem::from("filtered-hello");
+                        }
+                        Ok::<_, AgentsError>(data.model_data)
+                    }
+                    .boxed()
+                })),
+                ..RunConfig::default()
+            });
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("filtered multi-turn run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("final:result:rust"));
+
+        let normalized_replay =
+            result.to_input_list_mode(crate::result::ToInputListMode::Normalized);
+        assert_eq!(
+            normalized_replay.first().and_then(InputItem::as_text),
+            Some("filtered-hello")
+        );
+        assert!(
+            normalized_replay
+                .iter()
+                .all(|item| item.as_text() != Some("hello"))
+        );
+        assert_eq!(
+            normalized_replay
+                .iter()
+                .filter(|item| matches!(item, InputItem::Json { value } if value.get("type").and_then(Value::as_str) == Some("tool_call_output")))
+                .count(),
+            1
+        );
+        assert_eq!(
+            normalized_replay.last().and_then(InputItem::as_text),
+            Some("final:result:rust")
+        );
+
+        let durable_replay = result
+            .durable_state()
+            .expect("durable state should exist")
+            .resume_input();
+        assert_eq!(durable_replay, normalized_replay);
+    }
+
+    #[tokio::test]
+    async fn runner_errors_when_max_turns_are_exhausted_with_structured_tool_outputs() {
+        let provider = Arc::new(LoopingToolProvider {
+            model: Arc::new(LoopingToolModel),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search structured documents",
+            |_ctx, _args: SearchArgs| async move {
+                Ok::<_, AgentsError>(json!({"status":"loop","query":"rust"}))
+            },
+        )
+        .expect("function tool should build");
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                max_turns: 2,
+                ..RunConfig::default()
+            });
+
+        let error = runner
+            .run(&agent, "hello")
+            .await
+            .expect_err("plain structured run should exhaust max turns");
+        assert!(error.to_string().contains("max_turns (2)"));
+
+        let streamed = runner
+            .run_streamed(&agent, "hello")
+            .await
+            .expect("streamed structured run should start");
+        let error = streamed
+            .wait_for_completion()
+            .await
+            .expect_err("streamed structured run should exhaust max turns");
+        assert!(error.to_string().contains("max_turns (2)"));
     }
 
     #[tokio::test]

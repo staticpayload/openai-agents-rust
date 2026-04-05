@@ -33,12 +33,27 @@ pub(crate) fn prepare_model_input_items(
     generated_items: &[RunItem],
     reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Vec<InputItem> {
-    let mut normalized = copy_input_items(caller_items);
-    normalized.extend(run_items_to_input_items(
-        generated_items,
-        reasoning_item_id_policy,
-    ));
-    normalized
+    compose_replay_input_items(caller_items, generated_items, reasoning_item_id_policy)
+}
+
+pub(crate) fn compose_replay_input_items(
+    base_items: &[InputItem],
+    generated_items: &[RunItem],
+    reasoning_item_id_policy: ReasoningItemIdPolicy,
+) -> Vec<InputItem> {
+    let mut replay = copy_input_items(base_items);
+    let generated_inputs = run_items_to_input_items(generated_items, reasoning_item_id_policy);
+    let overlap = trailing_generated_overlap(base_items, &generated_inputs);
+    replay.extend(generated_inputs.into_iter().skip(overlap));
+    replay
+}
+
+fn trailing_generated_overlap(base_items: &[InputItem], generated_inputs: &[InputItem]) -> usize {
+    let max_overlap = base_items.len().min(generated_inputs.len());
+    (1..=max_overlap)
+        .rev()
+        .find(|overlap| base_items[base_items.len() - overlap..] == generated_inputs[..*overlap])
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -134,5 +149,64 @@ mod tests {
                 })
             }
         );
+    }
+
+    #[test]
+    fn composes_replay_without_duplicating_overlapping_generated_items() {
+        let replay = compose_replay_input_items(
+            &[
+                InputItem::from("filtered"),
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_call",
+                        "tool_name": "search",
+                        "arguments": {"query": "rust"},
+                        "call_id": "call-1",
+                        "namespace": null
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_call_output",
+                        "tool_name": "search",
+                        "output": {"type": "text", "text": "found"},
+                        "call_id": "call-1",
+                        "namespace": null
+                    }),
+                },
+            ],
+            &[
+                RunItem::ToolCall {
+                    tool_name: "search".to_owned(),
+                    arguments: json!({"query":"rust"}),
+                    call_id: Some("call-1".to_owned()),
+                    namespace: None,
+                },
+                RunItem::ToolCallOutput {
+                    tool_name: "search".to_owned(),
+                    output: OutputItem::Text {
+                        text: "found".to_owned(),
+                    },
+                    call_id: Some("call-1".to_owned()),
+                    namespace: None,
+                },
+                RunItem::MessageOutput {
+                    content: OutputItem::Text {
+                        text: "done".to_owned(),
+                    },
+                },
+            ],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(replay[0].as_text(), Some("filtered"));
+        assert_eq!(
+            replay
+                .iter()
+                .filter(|item| item.as_text() == Some("done"))
+                .count(),
+            1
+        );
+        assert_eq!(replay.len(), 4);
     }
 }

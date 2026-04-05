@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::agent::Agent;
 use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
+use crate::internal::items::compose_replay_input_items;
 use crate::internal::streaming::LiveRunStreamState;
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
@@ -83,18 +84,11 @@ impl RunResult {
                 .as_ref()
                 .unwrap_or(&self.new_items),
         };
-        let mut items = match mode {
-            ToInputListMode::PreserveAll => self.input.clone(),
-            ToInputListMode::Normalized => self
-                .normalized_input
-                .clone()
-                .unwrap_or_else(|| self.input.clone()),
+        let base_items = match mode {
+            ToInputListMode::PreserveAll => self.input.as_slice(),
+            ToInputListMode::Normalized => self.normalized_input.as_deref().unwrap_or(&self.input),
         };
-        items.extend(run_items_to_input_items(
-            new_items,
-            self.reasoning_item_id_policy,
-        ));
-        items
+        compose_replay_input_items(base_items, new_items, self.reasoning_item_id_policy)
     }
 
     pub fn durable_state(&self) -> Option<&RunState> {
@@ -207,17 +201,11 @@ impl RunResultStreaming {
                         .as_ref()
                         .unwrap_or(&self.new_items),
                 };
-                let mut items = match mode {
-                    ToInputListMode::PreserveAll => Vec::new(),
-                    ToInputListMode::Normalized => {
-                        self.normalized_input.clone().unwrap_or_default()
-                    }
+                let base_items = match mode {
+                    ToInputListMode::PreserveAll => &[][..],
+                    ToInputListMode::Normalized => self.normalized_input.as_deref().unwrap_or(&[]),
                 };
-                items.extend(run_items_to_input_items(
-                    new_items,
-                    self.reasoning_item_id_policy,
-                ));
-                items
+                compose_replay_input_items(base_items, new_items, self.reasoning_item_id_policy)
             })
     }
 
@@ -277,25 +265,6 @@ impl RunResultStreaming {
             .await
             .map(|result| result.to_input_list_mode(mode))
     }
-}
-
-fn run_items_to_input_items(
-    run_items: &[RunItem],
-    reasoning_item_id_policy: ReasoningItemIdPolicy,
-) -> Vec<InputItem> {
-    run_items
-        .iter()
-        .filter_map(|run_item| {
-            if matches!(
-                (run_item, reasoning_item_id_policy),
-                (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit)
-            ) {
-                None
-            } else {
-                run_item.to_input_item()
-            }
-        })
-        .collect()
 }
 
 #[cfg(test)]

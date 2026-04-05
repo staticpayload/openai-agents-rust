@@ -6,6 +6,8 @@ use crate::run_state::RunState;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
+pub(crate) type PreparedSourceRef = Uuid;
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct OpenAIServerConversationTracker {
     pub conversation_id: Option<String>,
@@ -123,8 +125,20 @@ impl OpenAIServerConversationTracker {
     }
 
     pub fn mark_input_as_sent(&mut self, items: &[crate::items::InputItem]) {
-        for item in items {
-            let source = self.consume_prepared_item_source(item);
+        self.mark_input_as_sent_with_sources(items, None);
+    }
+
+    pub fn mark_input_as_sent_with_sources(
+        &mut self,
+        items: &[crate::items::InputItem],
+        explicit_sources: Option<&[Option<PreparedSourceRef>]>,
+    ) {
+        for (index, item) in items.iter().enumerate() {
+            let source = explicit_sources
+                .and_then(|sources| sources.get(index))
+                .and_then(|source| source.as_ref())
+                .and_then(|source| self.consume_prepared_item_source_id(*source))
+                .unwrap_or_else(|| self.consume_prepared_item_source(item));
             let fingerprint = fingerprint_input_item(&source);
             self.sent_item_fingerprints.insert(fingerprint);
             self.remove_remaining_initial_item(&source);
@@ -238,6 +252,16 @@ impl OpenAIServerConversationTracker {
         state.auto_previous_response_id = self.auto_previous_response_id;
     }
 
+    pub fn prepared_source_refs(
+        &self,
+        items: &[crate::items::InputItem],
+    ) -> Vec<Option<PreparedSourceRef>> {
+        items
+            .iter()
+            .map(|item| self.resolve_prepared_item_source_id(item))
+            .collect()
+    }
+
     fn register_prepared_item_source(
         &mut self,
         prepared_item: &crate::items::InputItem,
@@ -265,30 +289,22 @@ impl OpenAIServerConversationTracker {
             return item.clone();
         };
 
-        if let Some(identity) = input_item_identity(item) {
-            self.prepared_item_source_ids_by_identity.remove(&identity);
-        }
-
-        let fingerprint = fingerprint_input_item(item);
-        if let Some(source_ids) = self
-            .prepared_item_source_ids_by_fingerprint
-            .get_mut(&fingerprint)
-        {
-            if let Some(index) = source_ids
-                .iter()
-                .position(|candidate| *candidate == source_id)
-            {
-                source_ids.remove(index);
-            }
-            if source_ids.is_empty() {
-                self.prepared_item_source_ids_by_fingerprint
-                    .remove(&fingerprint);
-            }
-        }
-
-        self.prepared_item_sources_by_id
-            .remove(&source_id)
+        self.consume_prepared_item_source_id(source_id)
             .unwrap_or_else(|| item.clone())
+    }
+
+    fn consume_prepared_item_source_id(
+        &mut self,
+        source_id: PreparedSourceRef,
+    ) -> Option<crate::items::InputItem> {
+        self.prepared_item_source_ids_by_identity
+            .retain(|_, candidate_source_id| *candidate_source_id != source_id);
+        self.prepared_item_source_ids_by_fingerprint
+            .retain(|_, source_ids| {
+                source_ids.retain(|candidate| *candidate != source_id);
+                !source_ids.is_empty()
+            });
+        self.prepared_item_sources_by_id.remove(&source_id)
     }
 
     fn resolve_prepared_item_source(
@@ -353,8 +369,155 @@ fn fingerprint_input_item(item: &crate::items::InputItem) -> String {
     serde_json::to_string(item).unwrap_or_else(|_| format!("{item:?}"))
 }
 
+pub(crate) fn derive_filtered_input_source_indices(
+    prepared_input: &[crate::items::InputItem],
+    filtered_input: &[crate::items::InputItem],
+    exact_source_indices_by_identity: &HashMap<InputItemIdentity, Vec<usize>>,
+) -> Vec<Option<usize>> {
+    let mut matches = vec![None; filtered_input.len()];
+    let mut matched_prepared = vec![false; prepared_input.len()];
+    let mut remaining_exact_sources = exact_source_indices_by_identity.clone();
+
+    for (filtered_index, item) in filtered_input.iter().enumerate() {
+        let Some(identity) = input_item_identity(item) else {
+            continue;
+        };
+        let Some(prepared_indices) = remaining_exact_sources.get_mut(&identity) else {
+            continue;
+        };
+        let Some(position) = prepared_indices
+            .iter()
+            .position(|prepared_index| !matched_prepared[*prepared_index])
+        else {
+            continue;
+        };
+        let prepared_index = prepared_indices.remove(position);
+        matched_prepared[prepared_index] = true;
+        matches[filtered_index] = Some(prepared_index);
+    }
+
+    for (filtered_index, item) in filtered_input.iter().enumerate() {
+        if matches[filtered_index].is_some() {
+            continue;
+        }
+        let fingerprint = fingerprint_input_item(item);
+        let matching_prepared = prepared_input
+            .iter()
+            .enumerate()
+            .filter_map(|(prepared_index, candidate)| {
+                (!matched_prepared[prepared_index]
+                    && fingerprint_input_item(candidate) == fingerprint)
+                    .then_some(prepared_index)
+            })
+            .collect::<Vec<_>>();
+        if matching_prepared.len() == 1 {
+            let prepared_index = matching_prepared[0];
+            matched_prepared[prepared_index] = true;
+            matches[filtered_index] = Some(prepared_index);
+        }
+    }
+
+    for filtered_index in 0..filtered_input.len() {
+        if matches[filtered_index].is_some() {
+            continue;
+        }
+
+        let previous_match = matches[..filtered_index]
+            .iter()
+            .rev()
+            .find_map(|value| *value);
+        let next_match = matches[filtered_index + 1..]
+            .iter()
+            .find_map(|value| *value);
+        let candidates =
+            unmatched_prepared_candidates(&matched_prepared, previous_match, next_match);
+
+        if candidates.len() == 1 {
+            let prepared_index = candidates[0];
+            matched_prepared[prepared_index] = true;
+            matches[filtered_index] = Some(prepared_index);
+        }
+    }
+
+    let mut remaining_prepared =
+        prepared_input
+            .iter()
+            .enumerate()
+            .filter_map(|(prepared_index, _)| {
+                (!matched_prepared[prepared_index]).then_some(prepared_index)
+            });
+
+    for filtered_index in 0..filtered_input.len() {
+        if matches[filtered_index].is_none() {
+            matches[filtered_index] = remaining_prepared.next();
+        }
+    }
+
+    matches
+}
+
+fn unmatched_prepared_candidates(
+    matched_prepared: &[bool],
+    previous_match: Option<usize>,
+    next_match: Option<usize>,
+) -> Vec<usize> {
+    let unmatched = matched_prepared
+        .iter()
+        .enumerate()
+        .filter_map(|(index, matched)| (!matched).then_some(index))
+        .collect::<Vec<_>>();
+
+    match (previous_match, next_match) {
+        (Some(previous), Some(next)) => {
+            let lower = previous.min(next);
+            let upper = previous.max(next);
+            let between = unmatched
+                .iter()
+                .copied()
+                .filter(|index| *index > lower && *index < upper)
+                .collect::<Vec<_>>();
+            if between.is_empty() {
+                unmatched
+            } else {
+                between
+            }
+        }
+        (Some(previous), None) => {
+            let after = unmatched
+                .iter()
+                .copied()
+                .filter(|index| *index > previous)
+                .collect::<Vec<_>>();
+            if after.is_empty() { unmatched } else { after }
+        }
+        (None, Some(next)) => {
+            let before = unmatched
+                .iter()
+                .copied()
+                .filter(|index| *index < next)
+                .collect::<Vec<_>>();
+            if before.is_empty() { unmatched } else { before }
+        }
+        (None, None) => unmatched,
+    }
+}
+
+pub(crate) fn build_filtered_input_identity_index(
+    items: &[crate::items::InputItem],
+) -> HashMap<InputItemIdentity, Vec<usize>> {
+    items
+        .iter()
+        .enumerate()
+        .fold(HashMap::new(), |mut acc, (index, item)| {
+            if let Some(identity) = input_item_identity(item) {
+                acc.entry(identity).or_insert_with(Vec::new).push(index);
+            }
+            acc
+        })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum InputItemIdentity {
+pub(crate) enum InputItemIdentity {
     Text(usize),
     JsonString(usize),
     JsonArray(usize),
@@ -482,6 +645,52 @@ mod tests {
 
         tracker.register_filtered_input_sources(&prepared_snapshot, &filtered);
         tracker.mark_input_as_sent(&filtered);
+
+        let retried = tracker.prepare_input(&original_input, &[]);
+        assert_eq!(
+            retried,
+            vec![InputItem::Json {
+                value: serde_json::json!({"type": "message", "content": "first"}),
+            }]
+        );
+    }
+
+    #[test]
+    fn tracker_preserves_source_identity_for_fresh_filtered_replacements() {
+        let mut tracker = OpenAIServerConversationTracker::new(&RunConfig {
+            conversation_id: Some("conv-1".to_owned()),
+            ..RunConfig::default()
+        });
+        let original_input = vec![
+            InputItem::Json {
+                value: serde_json::json!({"type": "message", "content": "first"}),
+            },
+            InputItem::Json {
+                value: serde_json::json!({"type": "message", "content": "second"}),
+            },
+            InputItem::Json {
+                value: serde_json::json!({"type": "message", "content": "third"}),
+            },
+        ];
+
+        let prepared = tracker.prepare_input(&original_input, &[]);
+        let filtered = vec![
+            prepared[1].clone(),
+            InputItem::Json {
+                value: serde_json::json!({"type": "message", "content": "third-filtered"}),
+            },
+        ];
+
+        let source_index = build_filtered_input_identity_index(&prepared);
+        let prepared_source_refs = tracker.prepared_source_refs(&prepared);
+        let source_items =
+            derive_filtered_input_source_indices(&prepared, &filtered, &source_index);
+        assert_eq!(source_items, vec![Some(1), Some(2)]);
+        let source_refs = source_items
+            .into_iter()
+            .map(|index| index.and_then(|index| prepared_source_refs.get(index).copied().flatten()))
+            .collect::<Vec<_>>();
+        tracker.mark_input_as_sent_with_sources(&filtered, Some(&source_refs));
 
         let retried = tracker.prepare_input(&original_input, &[]);
         assert_eq!(

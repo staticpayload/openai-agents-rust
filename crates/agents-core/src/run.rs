@@ -549,7 +549,10 @@ impl Runner {
                     self.config.reasoning_item_id_policy,
                 )
             };
-            let model_data = internal_turn_preparation::maybe_filter_model_input(
+            let prepared_source_refs = conversation_tracker
+                .is_active()
+                .then(|| conversation_tracker.prepared_source_refs(&prepared_input));
+            let filtered_model_input = internal_turn_preparation::maybe_filter_model_input(
                 &self.config,
                 &current_agent,
                 &context,
@@ -557,8 +560,13 @@ impl Runner {
                     input: prepared_input.clone(),
                     instructions: current_agent.instructions.clone(),
                 },
+                prepared_source_refs.as_deref(),
             )
             .await?;
+            let internal_turn_preparation::FilteredModelInput {
+                model_data,
+                source_items: filtered_source_items,
+            } = filtered_model_input;
             if model_data.input != prepared_input {
                 normalized_input_override = Some(model_data.input.clone());
             }
@@ -577,9 +585,10 @@ impl Runner {
             usage = internal_agent_runner_helpers::merge_usage(usage, response.usage.clone());
             context.usage = usage;
             if conversation_tracker.is_active() {
-                conversation_tracker
-                    .register_filtered_input_sources(&prepared_input, &delivered_model_input);
-                conversation_tracker.mark_input_as_sent(&delivered_model_input);
+                conversation_tracker.mark_input_as_sent_with_sources(
+                    &delivered_model_input,
+                    filtered_source_items.as_deref(),
+                );
             }
             conversation_tracker.apply_response(&response);
 

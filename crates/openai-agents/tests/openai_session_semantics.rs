@@ -3,8 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use openai_agents::{
     Agent, InputItem, MemorySession, Model, ModelProvider, ModelRequest, ModelResponse,
-    OpenAIConversationsSession, OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession,
-    OutputItem, RunConfig, RunOptions, Runner, Session,
+    OpenAIConversationAwareSession, OpenAIConversationsSession, OpenAIResponsesCompactionMode,
+    OpenAIResponsesCompactionSession, OutputItem, RunConfig, RunOptions, Runner, Session,
 };
 use tokio::sync::Mutex;
 
@@ -309,5 +309,53 @@ async fn openai_conversation_session_advances_previous_response_id_across_turns(
     assert_eq!(
         session.last_response_id().await.as_deref(),
         Some("resp-second")
+    );
+}
+
+#[tokio::test]
+async fn runner_uses_input_compaction_for_unstored_auto_sessions() {
+    let provider = CapturingProvider {
+        model: Arc::new(CapturingModel {
+            requests: Arc::new(Mutex::new(Vec::new())),
+            response_id: "resp-unstored".to_owned(),
+        }),
+    };
+    let session = OpenAIResponsesCompactionSession::new("session")
+        .with_mode(OpenAIResponsesCompactionMode::Auto)
+        .with_compaction_threshold(1);
+    session
+        .add_items(vec![InputItem::Json {
+            value: serde_json::json!({
+                "type": "tool_call_output",
+                "call_id": "call-1",
+            }),
+        }])
+        .await
+        .expect("seed items should be stored");
+
+    let runner = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .with_config(RunConfig {
+            model_settings: Some(openai_agents::ModelSettings {
+                store: Some(false),
+                ..openai_agents::ModelSettings::default()
+            }),
+            ..RunConfig::default()
+        });
+    let agent = Agent::builder("assistant").build();
+
+    runner
+        .run_with_session(&agent, "hello", &session)
+        .await
+        .expect("run should succeed");
+
+    let state = session
+        .load_openai_conversation_state()
+        .await
+        .expect("conversation state should load");
+    assert_eq!(state.previous_response_id, None);
+    assert_eq!(
+        session.last_unstored_response_id().await.as_deref(),
+        Some("resp-unstored")
     );
 }

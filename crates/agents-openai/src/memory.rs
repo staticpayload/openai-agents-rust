@@ -345,9 +345,31 @@ impl OpenAIResponsesCompactionSession {
         self.inner.clear().await?;
         self.inner.add_items(compacted).await?;
         *self.response_id.lock().await = Some(previous_response_id.clone());
-        *self.deferred_response_id.lock().await = Some(previous_response_id.clone());
-        *self.last_unstored_response_id.lock().await = Some(previous_response_id);
+        *self.deferred_response_id.lock().await = None;
+        *self.last_unstored_response_id.lock().await = None;
         Ok(())
+    }
+
+    async fn resolve_compaction_mode(
+        &self,
+        requested_mode: OpenAIResponsesCompactionMode,
+        response_id: Option<&str>,
+        store: Option<bool>,
+    ) -> OpenAIResponsesCompactionMode {
+        if !matches!(requested_mode, OpenAIResponsesCompactionMode::Auto) {
+            return requested_mode;
+        }
+        if matches!(store, Some(false)) {
+            return OpenAIResponsesCompactionMode::Input;
+        }
+        if response_id.is_none() {
+            return OpenAIResponsesCompactionMode::Input;
+        }
+        let last_unstored_response_id = self.last_unstored_response_id.lock().await.clone();
+        if response_id == last_unstored_response_id.as_deref() {
+            return OpenAIResponsesCompactionMode::Input;
+        }
+        OpenAIResponsesCompactionMode::PreviousResponseId
     }
 }
 
@@ -404,10 +426,15 @@ impl OpenAIConversationAwareSession for OpenAIResponsesCompactionSession {
     async fn load_openai_conversation_state(&self) -> Result<OpenAIConversationSessionState> {
         let deferred_response_id = self.deferred_response_id.lock().await.clone();
         let response_id = self.response_id.lock().await.clone();
+        let last_unstored_response_id = self.last_unstored_response_id.lock().await.clone();
         let previous_response_id = match self.mode {
             OpenAIResponsesCompactionMode::Input => None,
             OpenAIResponsesCompactionMode::PreviousResponseId
-            | OpenAIResponsesCompactionMode::Auto => deferred_response_id.or(response_id),
+            | OpenAIResponsesCompactionMode::Auto => {
+                let candidate = deferred_response_id.or(response_id);
+                (candidate.as_deref() != last_unstored_response_id.as_deref()).then_some(candidate)
+            }
+            .flatten(),
         };
         let auto_previous_response_id = !matches!(self.mode, OpenAIResponsesCompactionMode::Input);
 
@@ -426,12 +453,13 @@ impl OpenAIConversationAwareSession for OpenAIResponsesCompactionSession {
             OpenAIResponsesCompactionMode::Input => {
                 *self.response_id.lock().await = None;
                 *self.deferred_response_id.lock().await = None;
+                *self.last_unstored_response_id.lock().await = None;
             }
             OpenAIResponsesCompactionMode::PreviousResponseId
             | OpenAIResponsesCompactionMode::Auto => {
                 *self.response_id.lock().await = state.previous_response_id.clone();
                 *self.deferred_response_id.lock().await = None;
-                *self.last_unstored_response_id.lock().await = state.previous_response_id;
+                *self.last_unstored_response_id.lock().await = None;
             }
         }
         Ok(())
@@ -442,7 +470,7 @@ impl OpenAIConversationAwareSession for OpenAIResponsesCompactionSession {
 impl OpenAIResponsesCompactionAwareSession for OpenAIResponsesCompactionSession {
     async fn run_compaction(&self, args: Option<OpenAIResponsesCompactionArgs>) -> Result<()> {
         let args = args.unwrap_or_default();
-        let mode = match args.compaction_mode.as_deref() {
+        let requested_mode = match args.compaction_mode.as_deref() {
             Some("previous_response_id") => OpenAIResponsesCompactionMode::PreviousResponseId,
             Some("input") => OpenAIResponsesCompactionMode::Input,
             Some("auto") | None => self.mode,
@@ -453,12 +481,23 @@ impl OpenAIResponsesCompactionAwareSession for OpenAIResponsesCompactionSession 
             }
         };
         let force = args.force.unwrap_or(false);
+        if let Some(response_id) = args.response_id.clone() {
+            *self.response_id.lock().await = Some(response_id.clone());
+            if matches!(args.store, Some(false)) {
+                *self.last_unstored_response_id.lock().await = Some(response_id);
+            } else if matches!(args.store, Some(true)) {
+                *self.last_unstored_response_id.lock().await = None;
+            }
+        }
         let deferred_response_id = self.deferred_response_id.lock().await.clone();
         let current_response_id = self.response_id.lock().await.clone();
         let response_id = args
             .response_id
             .or(deferred_response_id)
             .or(current_response_id);
+        let mode = self
+            .resolve_compaction_mode(requested_mode, response_id.as_deref(), args.store)
+            .await;
 
         match mode {
             OpenAIResponsesCompactionMode::Input => self.compact_with_force(force).await,
@@ -790,6 +829,41 @@ mod tests {
             }
             InputItem::Text { .. } => panic!("expected compaction item"),
         }
+    }
+
+    #[tokio::test]
+    async fn auto_compaction_uses_input_mode_after_unstored_response() {
+        let session = OpenAIResponsesCompactionSession::new("session");
+        session
+            .add_items(vec![
+                InputItem::from("hello"),
+                InputItem::Json {
+                    value: serde_json::json!({"type":"tool_call_output","call_id":"call-1"}),
+                },
+            ])
+            .await
+            .expect("items should be stored");
+
+        session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                response_id: Some("resp-unstored".to_owned()),
+                store: Some(false),
+                force: Some(true),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect("compaction should succeed");
+
+        let state = session
+            .load_openai_conversation_state()
+            .await
+            .expect("conversation state should load");
+
+        assert_eq!(state.previous_response_id, None);
+        assert_eq!(
+            session.last_unstored_response_id().await.as_deref(),
+            Some("resp-unstored")
+        );
     }
 
     #[tokio::test]

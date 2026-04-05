@@ -539,11 +539,16 @@ impl Runner {
                     )
                     .await;
             }
-            let prepared_input = internal_items::prepare_model_input_items(
-                &current_input_history,
-                &normalized_generated_items,
-                self.config.reasoning_item_id_policy,
-            );
+            let prepared_input = if conversation_tracker.is_active() {
+                conversation_tracker
+                    .prepare_input(&current_input_history, &normalized_generated_items)
+            } else {
+                internal_items::prepare_model_input_items(
+                    &current_input_history,
+                    &normalized_generated_items,
+                    self.config.reasoning_item_id_policy,
+                )
+            };
             let model_data = internal_turn_preparation::maybe_filter_model_input(
                 &self.config,
                 &current_agent,
@@ -557,6 +562,7 @@ impl Runner {
             if normalized_generated_items.is_empty() && model_data.input != prepared_input {
                 normalized_input_override = Some(model_data.input.clone());
             }
+            let delivered_model_input = model_data.input.clone();
 
             let response = self
                 .call_model_with_retry(
@@ -570,6 +576,9 @@ impl Runner {
                 .await?;
             usage = internal_agent_runner_helpers::merge_usage(usage, response.usage.clone());
             context.usage = usage;
+            if conversation_tracker.is_active() {
+                conversation_tracker.mark_input_as_sent(&delivered_model_input);
+            }
             conversation_tracker.apply_response(&response);
 
             let output = response.output.clone();
@@ -861,7 +870,21 @@ impl Runner {
                     .await?;
             }
             if let Some(compaction_session) = session.compaction_session() {
-                compaction_session.run_compaction(None).await?;
+                let requested_model = self
+                    .config
+                    .model
+                    .clone()
+                    .or_else(|| internal_turn_preparation::get_model(&current_agent));
+                let settings = get_default_model_settings(requested_model.as_deref())
+                    .resolve(current_agent.model_settings.as_ref())
+                    .resolve(self.config.model_settings.as_ref());
+                compaction_session
+                    .run_compaction(Some(crate::memory::OpenAIResponsesCompactionArgs {
+                        response_id: conversation_tracker.previous_response_id.clone(),
+                        store: settings.store,
+                        ..crate::memory::OpenAIResponsesCompactionArgs::default()
+                    }))
+                    .await?;
             }
         }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use openai_agents::{
     Agent, Model, ModelProvider, ModelRequest, ModelResponse, OpenAIConversationsSession,
-    OutputItem, Runner,
+    OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession, OutputItem, Runner, Session,
 };
 use tokio::sync::Mutex;
 
@@ -77,4 +77,44 @@ async fn runner_uses_and_persists_openai_conversation_session_state() {
         session.last_response_id().await.as_deref(),
         Some("resp-next")
     );
+}
+
+#[tokio::test]
+async fn runner_triggers_auto_compaction_for_compaction_sessions() {
+    let provider = CapturingProvider {
+        model: Arc::new(CapturingModel {
+            requests: Arc::new(Mutex::new(Vec::new())),
+            response_id: "resp-compacted".to_owned(),
+        }),
+    };
+    let session = OpenAIResponsesCompactionSession::new("session")
+        .with_mode(OpenAIResponsesCompactionMode::Auto)
+        .with_compaction_threshold(1);
+    session
+        .add_items(vec![openai_agents::InputItem::Json {
+            value: serde_json::json!({
+                "type": "tool_call_output",
+                "call_id": "call-1",
+            }),
+        }])
+        .await
+        .expect("seed items should be stored");
+    let runner = Runner::new().with_model_provider(Arc::new(provider));
+    let agent = Agent::builder("assistant").build();
+
+    let result = runner
+        .run_with_session(&agent, "hello", &session)
+        .await
+        .expect("run should succeed");
+
+    assert_eq!(result.previous_response_id(), Some("resp-compacted"));
+    let items = session
+        .get_items()
+        .await
+        .expect("session items should load");
+    assert!(items.iter().any(|item| matches!(
+        item,
+        openai_agents::InputItem::Json { value }
+            if value.get("type").and_then(serde_json::Value::as_str) == Some("compaction")
+    )));
 }

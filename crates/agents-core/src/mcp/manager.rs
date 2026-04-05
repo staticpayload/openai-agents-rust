@@ -2,13 +2,14 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::errors::Result;
-use crate::mcp::server::MCPServer;
+use crate::mcp::server::{MCPServer, MCPTool};
 
 /// Manages MCP server lifecycles and exposes only connected servers.
 #[derive(Clone, Default)]
 pub struct MCPServerManager {
     all_servers: Vec<Arc<dyn MCPServer>>,
     active_servers: Vec<Arc<dyn MCPServer>>,
+    connected_server_names: HashSet<String>,
     pub failed_servers: Vec<String>,
     pub errors: HashMap<String, String>,
     pub drop_failed_servers: bool,
@@ -21,6 +22,7 @@ impl MCPServerManager {
         Self {
             active_servers: all_servers.clone(),
             all_servers,
+            connected_server_names: HashSet::new(),
             failed_servers: Vec::new(),
             errors: HashMap::new(),
             drop_failed_servers: true,
@@ -36,25 +38,45 @@ impl MCPServerManager {
         self.all_servers.clone()
     }
 
+    pub fn active_server_names(&self) -> Vec<String> {
+        self.active_servers
+            .iter()
+            .map(|server| server.name().to_owned())
+            .collect()
+    }
+
+    async fn connect_server(&mut self, server: &Arc<dyn MCPServer>) -> Result<bool> {
+        match server.connect().await {
+            Ok(()) => {
+                self.connected_server_names.insert(server.name().to_owned());
+                Ok(true)
+            }
+            Err(error) => {
+                let name = server.name().to_owned();
+                if !self.failed_servers.iter().any(|failed| failed == &name) {
+                    self.failed_servers.push(name.clone());
+                }
+                self.errors.insert(name, error.to_string());
+                if self.strict {
+                    return Err(error);
+                }
+                Ok(false)
+            }
+        }
+    }
+
     pub async fn connect_all(&mut self) -> Result<Vec<Arc<dyn MCPServer>>> {
         self.failed_servers.clear();
         self.errors.clear();
+        self.connected_server_names.clear();
 
+        let servers = self.all_servers.clone();
         let mut active = Vec::new();
-        for server in &self.all_servers {
-            match server.connect().await {
-                Ok(()) => active.push(server.clone()),
-                Err(error) => {
-                    let name = server.name().to_owned();
-                    self.failed_servers.push(name.clone());
-                    self.errors.insert(name, error.to_string());
-                    if self.strict {
-                        return Err(error);
-                    }
-                    if !self.drop_failed_servers {
-                        active.push(server.clone());
-                    }
-                }
+        for server in &servers {
+            if self.connect_server(server).await? {
+                active.push(server.clone());
+            } else if !self.drop_failed_servers {
+                active.push(server.clone());
             }
         }
 
@@ -75,13 +97,15 @@ impl MCPServerManager {
             .filter(|server| failed.contains(server.name()))
             .cloned()
             .collect::<Vec<_>>();
-        let mut retry_manager = Self::new(retry_servers);
-        retry_manager.drop_failed_servers = self.drop_failed_servers;
-        retry_manager.strict = self.strict;
-        let retried_active = retry_manager.connect_all().await?;
+        self.failed_servers.clear();
+        self.errors.clear();
 
-        self.failed_servers = retry_manager.failed_servers;
-        self.errors = retry_manager.errors;
+        let mut retried_active = Vec::new();
+        for server in retry_servers {
+            if self.connect_server(&server).await? {
+                retried_active.push(server);
+            }
+        }
 
         let mut active = self
             .active_servers
@@ -94,10 +118,23 @@ impl MCPServerManager {
         Ok(self.active_servers())
     }
 
-    pub async fn cleanup_all(&self) -> Result<()> {
-        for server in self.all_servers.iter().rev() {
-            server.cleanup().await?;
+    pub async fn list_tools_for_active(&self) -> Result<Vec<(Arc<dyn MCPServer>, Vec<MCPTool>)>> {
+        let mut results = Vec::new();
+        for server in &self.active_servers {
+            results.push((server.clone(), server.list_tools().await?));
         }
+        Ok(results)
+    }
+
+    pub async fn cleanup_all(&mut self) -> Result<()> {
+        let connected = self.connected_server_names.clone();
+        for server in self.all_servers.iter().rev() {
+            if connected.contains(server.name()) {
+                server.cleanup().await?;
+            }
+        }
+        self.connected_server_names.clear();
+        self.active_servers.clear();
         Ok(())
     }
 }
@@ -115,6 +152,7 @@ mod tests {
     struct FakeServer {
         name: String,
         fail_connect: bool,
+        tools: Vec<MCPTool>,
     }
 
     #[async_trait]
@@ -136,7 +174,7 @@ mod tests {
         }
 
         async fn list_tools(&self) -> Result<Vec<MCPTool>> {
-            Ok(Vec::new())
+            Ok(self.tools.clone())
         }
 
         async fn call_tool(
@@ -155,10 +193,12 @@ mod tests {
             Arc::new(FakeServer {
                 name: "ok".to_owned(),
                 fail_connect: false,
+                tools: vec![MCPTool::new("lookup")],
             }) as Arc<dyn MCPServer>,
             Arc::new(FakeServer {
                 name: "bad".to_owned(),
                 fail_connect: true,
+                tools: Vec::new(),
             }) as Arc<dyn MCPServer>,
         ]);
 
@@ -167,5 +207,54 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].name(), "ok");
         assert_eq!(manager.failed_servers, vec!["bad".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn reconnect_deduplicates_failed_server_names() {
+        let mut manager = MCPServerManager::new(vec![Arc::new(FakeServer {
+            name: "flaky".to_owned(),
+            fail_connect: true,
+            tools: Vec::new(),
+        }) as Arc<dyn MCPServer>]);
+
+        manager.connect_all().await.expect("connect should succeed");
+        manager.reconnect(true).await.expect("retry should succeed");
+
+        assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn cleanup_clears_active_servers_and_connected_names() {
+        let mut manager = MCPServerManager::new(vec![Arc::new(FakeServer {
+            name: "ok".to_owned(),
+            fail_connect: false,
+            tools: Vec::new(),
+        }) as Arc<dyn MCPServer>]);
+
+        manager.connect_all().await.expect("connect should succeed");
+        manager.cleanup_all().await.expect("cleanup should succeed");
+
+        assert!(manager.active_servers().is_empty());
+        assert!(manager.connected_server_names.is_empty());
+    }
+
+    #[tokio::test]
+    async fn lists_tools_for_active_servers() {
+        let mut manager = MCPServerManager::new(vec![Arc::new(FakeServer {
+            name: "ok".to_owned(),
+            fail_connect: false,
+            tools: vec![MCPTool::new("lookup")],
+        }) as Arc<dyn MCPServer>]);
+
+        manager.connect_all().await.expect("connect should succeed");
+        let listed = manager
+            .list_tools_for_active()
+            .await
+            .expect("list tools should succeed");
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0.name(), "ok");
+        assert_eq!(listed[0].1.len(), 1);
+        assert_eq!(listed[0].1[0].name, "lookup");
     }
 }

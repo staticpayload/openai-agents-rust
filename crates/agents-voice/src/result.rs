@@ -6,7 +6,7 @@ use futures::stream::{self, BoxStream};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Notify};
 
-use crate::events::VoiceStreamEvent;
+use crate::events::{VoiceStreamEvent, VoiceStreamEventTranscript};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 struct StreamedAudioSnapshot {
@@ -35,7 +35,12 @@ impl LiveAudioStreamState {
 
     async fn push_transcript(&self, text: String) {
         let mut snapshot = self.snapshot.lock().await;
-        snapshot.transcript.push(text);
+        snapshot.transcript.push(text.clone());
+        snapshot
+            .events
+            .push(VoiceStreamEvent::Transcript(VoiceStreamEventTranscript {
+                text,
+            }));
         drop(snapshot);
         self.notify.notify_waiters();
     }

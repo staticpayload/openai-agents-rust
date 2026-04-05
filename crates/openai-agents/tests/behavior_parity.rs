@@ -61,6 +61,12 @@ fn behavior_parity_doc_covers_required_python_families() {
         "realtime/test_openai_realtime",
         "voice/test_pipeline",
         "voice/test_workflow",
+        "test_responses_websocket_session",
+        "js/agents-core/run_and_streaming",
+        "js/agents-core/mcp",
+        "js/agents-openai/responses_and_sessions",
+        "js/agents-realtime/session",
+        "js/agents-extensions/realtime_transports",
     ];
 
     let missing = required
@@ -81,12 +87,16 @@ fn behavior_parity_doc_uses_allowed_statuses_and_existing_paths() {
     let parity_doc =
         fs::read_to_string(root.join("docs/BEHAVIOR_PARITY.md")).expect("behavior parity doc");
     let families = parse_family_rows(&parity_doc);
-    let allowed_statuses = ["covered", "partial", "omitted-with-rationale"];
+    let allowed_statuses = ["covered", "omitted-with-rationale"];
 
     let mut invalid_statuses = Vec::new();
     let mut missing_paths = Vec::new();
+    let mut partial_families = Vec::new();
 
     for (family, (status, paths)) in families {
+        if status == "partial" {
+            partial_families.push(family.clone());
+        }
         if !allowed_statuses.contains(&status.as_str()) {
             invalid_statuses.push(format!("{family} -> {status}"));
         }
@@ -103,6 +113,11 @@ fn behavior_parity_doc_uses_allowed_statuses_and_existing_paths() {
         invalid_statuses.is_empty(),
         "Behavior parity doc contains invalid statuses: {}",
         invalid_statuses.join(", ")
+    );
+    assert!(
+        partial_families.is_empty(),
+        "Behavior parity doc still contains partial families: {}",
+        partial_families.join(", ")
     );
     assert!(
         missing_paths.is_empty(),

@@ -11,6 +11,11 @@ pub struct VoiceStreamEventLifecycle {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct VoiceStreamEventTranscript {
+    pub text: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct VoiceStreamEventError {
     pub error: String,
 }
@@ -19,6 +24,7 @@ pub struct VoiceStreamEventError {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum VoiceStreamEvent {
     Audio(VoiceStreamEventAudio),
+    Transcript(VoiceStreamEventTranscript),
     Lifecycle(VoiceStreamEventLifecycle),
     Error(VoiceStreamEventError),
 }

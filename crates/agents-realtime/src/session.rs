@@ -8,11 +8,11 @@ use tokio::sync::{Mutex, Notify};
 use crate::agent::RealtimeAgent;
 use crate::config::RealtimeSessionModelSettings;
 use crate::events::{
-    RealtimeAgentStartEvent, RealtimeErrorEvent, RealtimeEvent, RealtimeEventInfo,
-    RealtimeInterruptedEvent, RealtimeRawModelEvent, RealtimeSessionClosedEvent,
+    RealtimeAgentEndEvent, RealtimeAgentStartEvent, RealtimeErrorEvent, RealtimeEvent,
+    RealtimeEventInfo, RealtimeInterruptedEvent, RealtimeRawModelEvent, RealtimeSessionClosedEvent,
     RealtimeSessionUpdatedEvent, RealtimeToolStart, RealtimeTranscriptDeltaEvent,
 };
-use crate::model::RealtimeModel;
+use crate::model::{RealtimeModel, RealtimePlaybackState};
 use crate::model_events::RealtimeModelEvent;
 
 #[derive(Clone, Debug, Default)]
@@ -23,6 +23,7 @@ struct RealtimeSessionState {
     events: Vec<RealtimeEvent>,
     active_agent: Option<RealtimeAgent>,
     model_settings: Option<RealtimeSessionModelSettings>,
+    playback_state: RealtimePlaybackState,
 }
 
 #[derive(Debug, Default)]
@@ -36,6 +37,28 @@ impl LiveRealtimeSessionState {
         let mut state = self.state.lock().await;
         if let RealtimeEvent::TranscriptDelta(delta) = &event {
             state.transcript.push_str(&delta.text);
+        }
+        match &event {
+            RealtimeEvent::RawModelEvent(raw) if raw.event_type == "audio" => {
+                state.playback_state.playing = true;
+                state.playback_state.buffered_audio_ms = raw
+                    .payload
+                    .get("bytes")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or_default();
+            }
+            RealtimeEvent::RawModelEvent(raw) if raw.event_type == "audio_done" => {
+                state.playback_state.playing = false;
+                state.playback_state.buffered_audio_ms = 0;
+            }
+            RealtimeEvent::Interrupted(_) => {
+                state.playback_state.playing = false;
+                state.playback_state.buffered_audio_ms = 0;
+            }
+            RealtimeEvent::AgentEnd(_) => {
+                state.playback_state.playing = false;
+            }
+            _ => {}
         }
         state.events.push(event);
         drop(state);
@@ -129,6 +152,14 @@ impl RealtimeSession {
         self.shared_state.state.lock().await.active_agent.clone()
     }
 
+    pub async fn model_settings(&self) -> Option<RealtimeSessionModelSettings> {
+        self.shared_state.state.lock().await.model_settings.clone()
+    }
+
+    pub async fn playback_state(&self) -> RealtimePlaybackState {
+        self.shared_state.state.lock().await.playback_state.clone()
+    }
+
     pub async fn connect(&self, agent: Option<RealtimeAgent>) -> Result<()> {
         if let Some(model_driver) = self.model_driver.lock().await.as_mut() {
             model_driver.connect().await?;
@@ -212,6 +243,7 @@ impl RealtimeSession {
     }
 
     pub async fn update_agent(&self, agent: RealtimeAgent) -> Result<RealtimeEvent> {
+        let previous_agent = self.active_agent().await;
         if let Some(model_settings) = &agent.model_settings {
             if let Some(model_driver) = self.model_driver.lock().await.as_mut() {
                 let model_events = model_driver.update_session(model_settings).await?;
@@ -225,6 +257,28 @@ impl RealtimeSession {
             let mut state = self.shared_state.state.lock().await;
             state.active_agent = Some(agent.clone());
             state.model_settings = agent.model_settings.clone();
+        }
+
+        if previous_agent.as_ref().map(|current| current.name.as_str()) != Some(agent.name.as_str())
+        {
+            if let Some(previous_agent) = previous_agent {
+                self.shared_state
+                    .push_event(RealtimeEvent::AgentEnd(RealtimeAgentEndEvent {
+                        info: RealtimeEventInfo {
+                            session_id: Some(self.session_id.clone()),
+                            agent_name: Some(previous_agent.name),
+                        },
+                    }))
+                    .await;
+            }
+            self.shared_state
+                .push_event(RealtimeEvent::AgentStart(RealtimeAgentStartEvent {
+                    info: RealtimeEventInfo {
+                        session_id: Some(self.session_id.clone()),
+                        agent_name: Some(agent.name.clone()),
+                    },
+                }))
+                .await;
         }
 
         let event = RealtimeEvent::SessionUpdated(RealtimeSessionUpdatedEvent {
@@ -247,16 +301,28 @@ impl RealtimeSession {
             model_driver.disconnect().await?;
         }
 
+        let active_agent = self.active_agent().await;
         {
             let mut state = self.shared_state.state.lock().await;
             state.connected = false;
             state.closed = true;
         }
 
+        if let Some(active_agent) = active_agent {
+            self.shared_state
+                .push_event(RealtimeEvent::AgentEnd(RealtimeAgentEndEvent {
+                    info: RealtimeEventInfo {
+                        session_id: Some(self.session_id.clone()),
+                        agent_name: Some(active_agent.name),
+                    },
+                }))
+                .await;
+        }
+
         let event = RealtimeEvent::SessionClosed(RealtimeSessionClosedEvent {
             info: RealtimeEventInfo {
                 session_id: Some(self.session_id.clone()),
-                agent_name: self.active_agent().await.map(|agent| agent.name),
+                agent_name: None,
             },
         });
         self.shared_state.push_event(event.clone()).await;
@@ -267,43 +333,55 @@ impl RealtimeSession {
 fn realtime_events_from_model_events(events: Vec<RealtimeModelEvent>) -> Vec<RealtimeEvent> {
     events
         .into_iter()
-        .map(|event| match event {
-            RealtimeModelEvent::Error(error) => RealtimeEvent::Error(RealtimeErrorEvent {
+        .flat_map(|event| match event {
+            RealtimeModelEvent::Error(error) => vec![RealtimeEvent::Error(RealtimeErrorEvent {
                 message: error.message,
-            }),
-            RealtimeModelEvent::ToolCall(call) => RealtimeEvent::ToolStart(RealtimeToolStart {
-                call_id: call.call_id,
-                name: call.name,
-            }),
-            RealtimeModelEvent::Audio(audio) => {
+            })],
+            RealtimeModelEvent::ToolCall(call) => vec![
+                RealtimeEvent::ToolStart(RealtimeToolStart {
+                    call_id: call.call_id.clone(),
+                    name: call.name.clone(),
+                }),
                 RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
+                    event_type: "tool_call".to_owned(),
+                    payload: serde_json::json!({
+                        "call_id": call.call_id,
+                        "name": call.name,
+                        "arguments": call.arguments,
+                    }),
+                }),
+            ],
+            RealtimeModelEvent::Audio(audio) => {
+                vec![RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
                     event_type: "audio".to_owned(),
                     payload: serde_json::json!({ "bytes": audio.bytes.len() }),
-                })
+                })]
             }
             RealtimeModelEvent::AudioInterrupted(interrupted) => {
-                RealtimeEvent::Interrupted(RealtimeInterruptedEvent {
+                vec![RealtimeEvent::Interrupted(RealtimeInterruptedEvent {
                     reason: interrupted.reason,
-                })
+                })]
             }
             RealtimeModelEvent::AudioDone(done) => {
-                RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
+                vec![RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
                     event_type: "audio_done".to_owned(),
                     payload: serde_json::json!({ "total_bytes": done.total_bytes }),
-                })
+                })]
             }
             RealtimeModelEvent::TranscriptDelta(delta) => {
-                RealtimeEvent::TranscriptDelta(RealtimeTranscriptDeltaEvent { text: delta.text })
+                vec![RealtimeEvent::TranscriptDelta(
+                    RealtimeTranscriptDeltaEvent { text: delta.text },
+                )]
             }
             RealtimeModelEvent::ResponseDone(done) => {
-                RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
+                vec![RealtimeEvent::RawModelEvent(RealtimeRawModelEvent {
                     event_type: "response_done".to_owned(),
                     payload: serde_json::json!({
                         "response_id": done.response_id,
                         "request_id": done.request_id,
                         "payload": done.payload,
                     }),
-                })
+                })]
             }
         })
         .collect()

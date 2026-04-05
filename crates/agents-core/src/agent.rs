@@ -21,7 +21,7 @@ use crate::guardrail::{InputGuardrail, OutputGuardrail};
 use crate::handoff::Handoff;
 use crate::items::{OutputItem, RunItem};
 use crate::lifecycle::SharedAgentHooks;
-use crate::mcp::{MCPServer, MCPToolMetaResolver, MCPUtil, ToolFilter};
+use crate::mcp::{MCPServer, MCPServerManager, MCPToolMetaResolver, MCPUtil, ToolFilter};
 use crate::model_settings::ModelSettings;
 use crate::result::{AgentToolInvocation, RunResult, RunResultStreaming};
 use crate::run::get_default_agent_runner;
@@ -346,16 +346,24 @@ impl Agent {
     ) -> Result<Vec<FunctionTool>> {
         let mut tools = self.function_tools.clone();
         if !self.mcp_servers.is_empty() {
-            tools.extend(
-                MCPUtil::get_all_function_tools(
-                    &self.mcp_servers,
+            let mut manager = MCPServerManager::new(self.mcp_servers.iter().cloned());
+            let mcp_tools = async {
+                manager.connect_all().await?;
+                MCPUtil::get_all_function_tools_connected(
+                    &manager.active_servers(),
                     self.mcp_tool_filter.as_ref(),
                     run_context.clone(),
                     self.clone(),
                     self.mcp_tool_meta_resolver.clone(),
                 )
-                .await?,
-            );
+                .await
+            }
+            .await;
+            let cleanup_result = manager.cleanup_all().await;
+            if let Err(error) = cleanup_result {
+                return Err(error);
+            }
+            tools.extend(mcp_tools?);
         }
 
         let mut visible = Vec::new();

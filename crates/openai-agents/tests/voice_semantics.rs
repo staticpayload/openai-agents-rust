@@ -36,10 +36,13 @@ async fn voice_pipeline_returns_live_streamed_audio_result() {
     );
     assert!(completed.audio_chunks >= 1);
     assert!(events.iter().any(
-        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "started")
+        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "session_started")
     ));
     assert!(events.iter().any(
-        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "completed")
+        |event| matches!(event, VoiceStreamEvent::Transcript(delta) if delta.text == "transcribed:audio/wav:3")
+    ));
+    assert!(events.iter().any(
+        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "session_ended")
     ));
 }
 
@@ -69,6 +72,9 @@ async fn voice_pipeline_supports_streamed_audio_input() {
     assert_eq!(completed.transcript, vec!["[2][1]".to_owned()]);
     assert_eq!(completed.audio_chunks, 0);
     assert!(completed.events.iter().any(
-        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "completed")
+        |event| matches!(event, VoiceStreamEvent::Transcript(delta) if delta.text == "[2][1]")
+    ));
+    assert!(completed.events.iter().any(
+        |event| matches!(event, VoiceStreamEvent::Lifecycle(data) if data.event == "session_ended")
     ));
 }

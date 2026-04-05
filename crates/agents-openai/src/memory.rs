@@ -324,7 +324,7 @@ impl OpenAIResponsesCompactionSession {
     ) -> Result<()> {
         let items = sanitize_compaction_items(&self.inner.get_items().await?);
         let candidates = select_compaction_candidate_items(&items);
-        if !force && !default_should_trigger_compaction(&candidates) {
+        if !force && candidates.len() < self.compaction_threshold {
             return Ok(());
         }
 
@@ -528,7 +528,35 @@ fn is_compaction_marker(item: &InputItem) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
     use super::*;
+
+    async fn serve_single_json_response(status: &str, body: &str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let status = status.to_owned();
+        let body = body.to_owned();
+
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("request should connect");
+            let mut buffer = vec![0_u8; 4096];
+            let _ = stream.read(&mut buffer).await.expect("request should read");
+            let response = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .await
+                .expect("response should write");
+        });
+
+        format!("http://{address}/v1")
+    }
 
     #[tokio::test]
     async fn compaction_session_trims_history_when_threshold_exceeded() {
@@ -727,6 +755,65 @@ mod tests {
         };
         assert!(json.get(TOOL_CALL_SESSION_DESCRIPTION_KEY).is_none());
         assert!(json.get(TOOL_CALL_SESSION_TITLE_KEY).is_none());
+    }
+
+    #[tokio::test]
+    async fn previous_response_id_compaction_respects_custom_threshold() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_compaction_threshold(1)
+            .with_mode(OpenAIResponsesCompactionMode::PreviousResponseId);
+        session
+            .add_items(vec![
+                InputItem::from("hello"),
+                InputItem::Json {
+                    value: serde_json::json!({"type":"tool_call_output","call_id":"call-1"}),
+                },
+            ])
+            .await
+            .expect("items should be stored");
+
+        session
+            .run_compaction(Some(OpenAIResponsesCompactionArgs {
+                response_id: Some("resp-next".to_owned()),
+                ..OpenAIResponsesCompactionArgs::default()
+            }))
+            .await
+            .expect("compaction should succeed");
+
+        let items = session.get_items().await.expect("items should load");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].as_text(), Some("hello"));
+        match &items[1] {
+            InputItem::Json { value } => {
+                assert_eq!(value["type"], "compaction");
+                assert_eq!(value["previous_response_id"], "resp-next");
+            }
+            InputItem::Text { .. } => panic!("expected compaction item"),
+        }
+    }
+
+    #[tokio::test]
+    async fn start_openai_conversations_session_reads_remote_conversation_id() {
+        let base_url = serve_single_json_response("201 Created", r#"{"id":"conv_remote"}"#).await;
+        let conversation_id = start_openai_conversations_session(Some(
+            OpenAIClientOptions::new(Some("sk-test".to_owned())).with_base_url(base_url),
+        ))
+        .await
+        .expect("conversation should start");
+
+        assert_eq!(conversation_id, "conv_remote");
+    }
+
+    #[tokio::test]
+    async fn start_openai_conversations_session_rejects_non_success_statuses() {
+        let base_url = serve_single_json_response("400 Bad Request", r#"{"error":"bad"}"#).await;
+        let error = start_openai_conversations_session(Some(
+            OpenAIClientOptions::new(Some("sk-test".to_owned())).with_base_url(base_url),
+        ))
+        .await
+        .expect_err("non-success status should fail");
+
+        assert!(error.to_string().contains("400 Bad Request"));
     }
 
     #[test]

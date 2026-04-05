@@ -80,11 +80,14 @@ impl VoicePipeline {
 
         tokio::spawn(async move {
             recorder
-                .push_events(vec![VoiceStreamEvent::Lifecycle(
-                    VoiceStreamEventLifecycle {
+                .push_events(vec![
+                    VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
                         event: "started".to_owned(),
-                    },
-                )])
+                    }),
+                    VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
+                        event: "session_started".to_owned(),
+                    }),
+                ])
                 .await;
 
             let completion = async {
@@ -105,11 +108,14 @@ impl VoicePipeline {
             match completion {
                 Ok(()) => {
                     recorder
-                        .push_events(vec![VoiceStreamEvent::Lifecycle(
-                            VoiceStreamEventLifecycle {
+                        .push_events(vec![
+                            VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
                                 event: "completed".to_owned(),
-                            },
-                        )])
+                            }),
+                            VoiceStreamEvent::Lifecycle(VoiceStreamEventLifecycle {
+                                event: "session_ended".to_owned(),
+                            }),
+                        ])
                         .await;
                     recorder.complete().await;
                 }

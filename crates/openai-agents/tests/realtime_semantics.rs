@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use openai_agents::realtime::{
-    RealtimeAgent, RealtimeEvent, RealtimeRunner, RealtimeSessionModelSettings,
+    RealtimeAgent, RealtimeEvent, RealtimeRunConfig, RealtimeRunner, RealtimeSessionModelSettings,
 };
 
 #[tokio::test]
@@ -51,11 +51,46 @@ async fn realtime_session_streams_events_for_live_commands() {
             .iter()
             .any(|event| matches!(event, RealtimeEvent::Interrupted(_)))
     );
+    assert!(events.iter().any(
+        |event| matches!(event, RealtimeEvent::AgentEnd(ended) if ended.info.agent_name.as_deref() == Some("assistant"))
+    ));
+    assert!(events.iter().any(
+        |event| matches!(event, RealtimeEvent::AgentStart(started) if started.info.agent_name.as_deref() == Some("specialist"))
+    ));
     assert!(events
         .iter()
         .any(|event| matches!(event, RealtimeEvent::SessionUpdated(updated) if updated.model.as_deref() == Some("gpt-realtime-specialist"))));
+    assert_eq!(
+        session
+            .model_settings()
+            .await
+            .and_then(|settings| settings.model_name),
+        Some("gpt-realtime-specialist".to_owned())
+    );
+    assert!(!session.playback_state().await.playing);
     assert!(matches!(
         events.last(),
         Some(RealtimeEvent::SessionClosed(_))
     ));
+}
+
+#[tokio::test]
+async fn realtime_runner_applies_run_config_model_settings() {
+    let runner =
+        RealtimeRunner::new(RealtimeAgent::new("assistant")).with_config(RealtimeRunConfig {
+            model_settings: Some(RealtimeSessionModelSettings {
+                model_name: Some("gpt-realtime-configured".to_owned()),
+                ..RealtimeSessionModelSettings::default()
+            }),
+            ..RealtimeRunConfig::default()
+        });
+    let session = runner.run().await.expect("session should start");
+
+    assert_eq!(
+        session
+            .model_settings()
+            .await
+            .and_then(|settings| settings.model_name),
+        Some("gpt-realtime-configured".to_owned())
+    );
 }

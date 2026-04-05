@@ -845,6 +845,9 @@ impl Runner {
                     .save_openai_conversation_state(conversation_tracker.session_state())
                     .await?;
             }
+            if let Some(compaction_session) = session.compaction_session() {
+                compaction_session.run_compaction(None).await?;
+            }
         }
 
         let mut run_state = RunState::new(

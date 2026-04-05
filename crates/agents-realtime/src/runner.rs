@@ -27,6 +27,10 @@ impl RealtimeRunner {
     }
 
     pub async fn run(&self) -> Result<RealtimeSession> {
+        let mut effective_agent = self.agent.clone();
+        if self.config.model_settings.is_some() {
+            effective_agent.model_settings = self.config.model_settings.clone();
+        }
         let model_name = self
             .config
             .model_settings
@@ -46,9 +50,9 @@ impl RealtimeRunner {
                 connected: false,
             }))
             .await;
-        session.connect(Some(self.agent.clone())).await?;
-        if self.agent.model_settings.is_some() {
-            session.update_agent(self.agent.clone()).await?;
+        session.connect(Some(effective_agent.clone())).await?;
+        if effective_agent.model_settings.is_some() {
+            session.update_agent(effective_agent).await?;
         }
         Ok(session)
     }

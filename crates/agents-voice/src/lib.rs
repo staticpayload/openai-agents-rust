@@ -18,6 +18,7 @@ mod workflow;
 
 pub use events::{
     VoiceStreamEvent, VoiceStreamEventAudio, VoiceStreamEventError, VoiceStreamEventLifecycle,
+    VoiceStreamEventTranscript,
 };
 pub use exceptions::STTWebsocketConnectionError;
 pub use input::{AudioInput, StreamedAudioInput};

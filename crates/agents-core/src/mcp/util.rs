@@ -89,11 +89,21 @@ impl MCPUtil {
         run_context: RunContextWrapper<RunContext>,
         agent: Agent,
     ) -> Result<Vec<MCPTool>> {
-        let server_name = server.name().to_owned();
         server.connect().await?;
-        let tools = server.list_tools().await;
+        let tools =
+            Self::list_tools_filtered_connected(server.clone(), filter, run_context, agent).await;
         server.cleanup().await?;
-        let tools = tools?;
+        tools
+    }
+
+    pub async fn list_tools_filtered_connected(
+        server: Arc<dyn MCPServer>,
+        filter: Option<&ToolFilter>,
+        run_context: RunContextWrapper<RunContext>,
+        agent: Agent,
+    ) -> Result<Vec<MCPTool>> {
+        let server_name = server.name().to_owned();
+        let tools = server.list_tools().await?;
         Ok(tools
             .into_iter()
             .filter(|tool| {
@@ -165,6 +175,15 @@ impl MCPUtil {
         Ok(function_tool)
     }
 
+    pub fn to_function_tool_connected(
+        server: Arc<dyn MCPServer>,
+        tool: &MCPTool,
+        meta_resolver: Option<MCPToolMetaResolver>,
+        run_context: RunContextWrapper<RunContext>,
+    ) -> Result<FunctionTool> {
+        Self::to_function_tool(server, tool, meta_resolver, run_context)
+    }
+
     pub async fn get_function_tools(
         server: Arc<dyn MCPServer>,
         filter: Option<&ToolFilter>,
@@ -187,7 +206,41 @@ impl MCPUtil {
             .collect::<Result<Vec<_>>>()
     }
 
+    pub async fn get_function_tools_connected(
+        server: Arc<dyn MCPServer>,
+        filter: Option<&ToolFilter>,
+        run_context: RunContextWrapper<RunContext>,
+        agent: Agent,
+        meta_resolver: Option<MCPToolMetaResolver>,
+    ) -> Result<Vec<FunctionTool>> {
+        let tools =
+            Self::list_tools_filtered_connected(server.clone(), filter, run_context.clone(), agent)
+                .await?;
+        tools
+            .iter()
+            .map(|tool| {
+                Self::to_function_tool_connected(
+                    server.clone(),
+                    tool,
+                    meta_resolver.clone(),
+                    run_context.clone(),
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     pub async fn get_all_function_tools(
+        servers: &[Arc<dyn MCPServer>],
+        filter: Option<&ToolFilter>,
+        run_context: RunContextWrapper<RunContext>,
+        agent: Agent,
+        meta_resolver: Option<MCPToolMetaResolver>,
+    ) -> Result<Vec<FunctionTool>> {
+        Self::get_all_function_tools_connected(servers, filter, run_context, agent, meta_resolver)
+            .await
+    }
+
+    pub async fn get_all_function_tools_connected(
         servers: &[Arc<dyn MCPServer>],
         filter: Option<&ToolFilter>,
         run_context: RunContextWrapper<RunContext>,
@@ -198,7 +251,7 @@ impl MCPUtil {
         let mut seen = std::collections::HashSet::new();
 
         for server in servers {
-            for tool in Self::get_function_tools(
+            for tool in Self::get_function_tools_connected(
                 server.clone(),
                 filter,
                 run_context.clone(),

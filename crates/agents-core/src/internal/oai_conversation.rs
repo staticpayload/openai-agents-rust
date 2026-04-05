@@ -124,6 +124,39 @@ impl OpenAIServerConversationTracker {
         }
     }
 
+    pub fn register_filtered_input_sources(
+        &mut self,
+        prepared_input: &[crate::items::InputItem],
+        filtered_input: &[crate::items::InputItem],
+    ) {
+        if prepared_input == filtered_input {
+            return;
+        }
+
+        let mut available_sources = prepared_input
+            .iter()
+            .map(|item| {
+                (
+                    fingerprint_input_item(item),
+                    self.resolve_prepared_item_source(item),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        for item in filtered_input {
+            let filtered_fingerprint = fingerprint_input_item(item);
+            let source_index = available_sources
+                .iter()
+                .position(|(prepared_fingerprint, _)| *prepared_fingerprint == filtered_fingerprint)
+                .unwrap_or(0);
+            let (_, source_item) = available_sources.remove(source_index);
+            self.register_prepared_item_source(item.clone(), source_item);
+            if available_sources.is_empty() {
+                break;
+            }
+        }
+    }
+
     pub fn rewind_input(&mut self, items: &[crate::items::InputItem]) {
         let mut rewind_items = Vec::new();
         for item in items {
@@ -197,6 +230,7 @@ impl OpenAIServerConversationTracker {
         &mut self,
         item: &crate::items::InputItem,
     ) -> crate::items::InputItem {
+        let source_item = self.resolve_prepared_item_source(item);
         let fingerprint = fingerprint_input_item(item);
         if let Some(source_items) = self
             .prepared_item_sources_by_fingerprint
@@ -209,7 +243,18 @@ impl OpenAIServerConversationTracker {
             }
             return source_item;
         }
-        item.clone()
+        source_item
+    }
+
+    fn resolve_prepared_item_source(
+        &self,
+        item: &crate::items::InputItem,
+    ) -> crate::items::InputItem {
+        let fingerprint = fingerprint_input_item(item);
+        self.prepared_item_sources_by_fingerprint
+            .get(&fingerprint)
+            .and_then(|items| items.first().cloned())
+            .unwrap_or_else(|| item.clone())
     }
 
     fn remove_remaining_initial_item(&mut self, item: &crate::items::InputItem) {
@@ -293,5 +338,23 @@ mod tests {
             retried,
             vec![InputItem::from("first"), InputItem::from("second")]
         );
+    }
+
+    #[test]
+    fn tracker_marks_rewritten_filtered_items_as_original_sources() {
+        let mut tracker = OpenAIServerConversationTracker::new(&RunConfig {
+            conversation_id: Some("conv-1".to_owned()),
+            ..RunConfig::default()
+        });
+        let original_input = vec![InputItem::from("hello")];
+
+        let prepared = tracker.prepare_input(&original_input, &[]);
+        let filtered = vec![InputItem::from("filtered-hello")];
+
+        tracker.register_filtered_input_sources(&prepared, &filtered);
+        tracker.mark_input_as_sent(&filtered);
+
+        let retried = tracker.prepare_input(&original_input, &[]);
+        assert!(retried.is_empty());
     }
 }

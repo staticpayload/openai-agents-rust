@@ -577,6 +577,8 @@ impl Runner {
             usage = internal_agent_runner_helpers::merge_usage(usage, response.usage.clone());
             context.usage = usage;
             if conversation_tracker.is_active() {
+                conversation_tracker
+                    .register_filtered_input_sources(&prepared_input, &delivered_model_input);
                 conversation_tracker.mark_input_as_sent(&delivered_model_input);
             }
             conversation_tracker.apply_response(&response);
@@ -1738,6 +1740,16 @@ mod tests {
         }
     }
 
+    struct StaticProvider {
+        model: Arc<dyn Model>,
+    }
+
+    impl ModelProvider for StaticProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
     #[derive(Clone, Default)]
     struct RequestCaptureModel {
         previous_response_id: Arc<Mutex<Option<String>>>,
@@ -1770,6 +1782,47 @@ mod tests {
                 usage: Usage::default(),
                 response_id: None,
                 request_id: None,
+            })
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct ConversationDeltaCaptureModel {
+        requests: Arc<Mutex<Vec<ModelRequest>>>,
+    }
+
+    #[async_trait]
+    impl Model for ConversationDeltaCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let mut requests = self
+                .requests
+                .lock()
+                .expect("conversation delta capture model lock");
+            requests.push(request.clone());
+
+            if requests.len() == 1 {
+                return Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "call-1".to_owned(),
+                        tool_name: "search".to_owned(),
+                        arguments: json!({"query":"rust"}),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("resp-1".to_owned()),
+                    request_id: Some("req-1".to_owned()),
+                });
+            }
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "done".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-2".to_owned()),
+                request_id: Some("req-2".to_owned()),
             })
         }
     }
@@ -2785,6 +2838,73 @@ mod tests {
             .expect("durable state should exist")
             .resume_input();
         assert_eq!(durable_replay, normalized_replay);
+    }
+
+    #[tokio::test]
+    async fn runner_does_not_replay_filter_rewritten_initial_input_in_server_conversations() {
+        let model = Arc::new(ConversationDeltaCaptureModel::default());
+        let provider = Arc::new(StaticProvider {
+            model: model.clone(),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build");
+        let runner = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                conversation_id: Some("conv-filtered".to_owned()),
+                auto_previous_response_id: true,
+                call_model_input_filter: Some(Arc::new(|mut data| {
+                    async move {
+                        if let Some(first) = data.model_data.input.first_mut() {
+                            if first.as_text() == Some("hello") {
+                                *first = InputItem::from("filtered-hello");
+                            }
+                        }
+                        Ok::<_, AgentsError>(data.model_data)
+                    }
+                    .boxed()
+                })),
+                ..RunConfig::default()
+            });
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let result = runner
+            .run(&agent, "hello")
+            .await
+            .expect("server-managed filtered run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("done"));
+
+        let requests = model
+            .requests
+            .lock()
+            .expect("conversation delta requests lock")
+            .clone();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0]
+                .input
+                .iter()
+                .filter_map(InputItem::as_text)
+                .collect::<Vec<_>>(),
+            vec!["filtered-hello"]
+        );
+        assert!(requests[1].input.iter().all(
+            |item| item.as_text() != Some("hello") && item.as_text() != Some("filtered-hello")
+        ));
+        assert!(requests[1].input.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("type").and_then(Value::as_str) == Some("tool_call_output")
+        )));
     }
 
     #[tokio::test]

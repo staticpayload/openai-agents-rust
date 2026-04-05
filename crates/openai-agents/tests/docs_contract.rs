@@ -1,6 +1,38 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+fn contains_machine_local_absolute_path(contents: &str) -> bool {
+    const UNIX_ROOTS: &[&str] = &[
+        "/Users/",
+        "/home/",
+        "/root/",
+        "/workspace/",
+        "/workspaces/",
+        "/github/workspace/",
+        "/__w/",
+    ];
+    const WINDOWS_PATH_PREFIXES: &[&str] = &["Users\\", "a\\", "workspace\\", "workspaces\\"];
+
+    if UNIX_ROOTS.iter().any(|root| contents.contains(root)) || contents.contains("\\Users\\") {
+        return true;
+    }
+
+    contents.char_indices().any(|(idx, ch)| {
+        if !ch.is_ascii_alphabetic() {
+            return false;
+        }
+
+        let tail = &contents[idx..];
+        let mut chars = tail.chars();
+        let _drive = chars.next();
+        matches!(chars.next(), Some(':'))
+            && matches!(chars.next(), Some('\\'))
+            && WINDOWS_PATH_PREFIXES
+                .iter()
+                .any(|prefix| chars.as_str().starts_with(prefix))
+    })
+}
+
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -22,8 +54,7 @@ fn parity_adjacent_docs_do_not_contain_machine_local_absolute_links() {
         .into_iter()
         .filter_map(|relative| {
             let contents = fs::read_to_string(root.join(relative)).expect("doc contents");
-            (contents.contains("/Users/") || contents.contains("\\Users\\"))
-                .then_some(relative.to_owned())
+            contains_machine_local_absolute_path(&contents).then_some(relative.to_owned())
         })
         .collect::<Vec<_>>();
 
@@ -32,6 +63,36 @@ fn parity_adjacent_docs_do_not_contain_machine_local_absolute_links() {
         "Parity-adjacent docs contain machine-local absolute links: {}",
         offenders.join(", ")
     );
+}
+
+#[test]
+fn portability_detector_rejects_non_macos_machine_local_absolute_paths() {
+    for absolute_path in [
+        "/home/alice/openai-agents-rust/docs/ROOT_EXPORT_PARITY.md",
+        "/workspace/openai-agents-rust/docs/BEHAVIOR_PARITY.md",
+        "/github/workspace/docs/PORTING_MATRIX.md",
+        "/__w/openai-agents-rust/openai-agents-rust/docs/PORTING_PI_ID.md",
+        "C:\\Users\\alice\\openai-agents-rust\\docs\\ROOT_EXPORT_PARITY.md",
+        "D:\\a\\openai-agents-rust\\openai-agents-rust\\docs\\BEHAVIOR_PARITY.md",
+    ] {
+        assert!(
+            contains_machine_local_absolute_path(absolute_path),
+            "expected portability detector to reject machine-local absolute path: {absolute_path}"
+        );
+    }
+
+    for valid_relative_link in [
+        "docs/ROOT_EXPORT_PARITY.md",
+        "./docs/BEHAVIOR_PARITY.md",
+        "../docs/PORTING_MATRIX.md",
+        "[root exports](docs/ROOT_EXPORT_PARITY.md)",
+        "reference/openai-agents-python/src/agents/__init__.py",
+    ] {
+        assert!(
+            !contains_machine_local_absolute_path(valid_relative_link),
+            "portability detector should not reject valid repo-relative path: {valid_relative_link}"
+        );
+    }
 }
 
 #[test]

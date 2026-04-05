@@ -66,12 +66,12 @@ impl MCPServerManager {
     }
 
     pub async fn connect_all(&mut self) -> Result<Vec<Arc<dyn MCPServer>>> {
-        let previous_active_servers = self
-            .active_servers
-            .iter()
-            .filter(|server| self.connected_server_names.contains(server.name()))
-            .cloned()
-            .collect::<Vec<_>>();
+        let previous_active_servers =
+            if self.connected_server_names.is_empty() && self.failed_servers.is_empty() {
+                Vec::new()
+            } else {
+                self.active_servers.clone()
+            };
         self.failed_servers.clear();
         self.errors.clear();
         self.connected_server_names.clear();
@@ -358,6 +358,51 @@ mod tests {
 
         assert!(error.to_string().contains("connect failed"));
         assert_eq!(manager.active_server_names(), vec!["stable".to_owned()]);
+        assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
+        assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn strict_connect_preserves_existing_failed_active_servers_when_not_dropping_failed() {
+        let stable = Arc::new(CountingServer {
+            name: "stable".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(0),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let flaky = Arc::new(CountingServer {
+            name: "flaky".to_owned(),
+            fail_connects_remaining: AtomicUsize::new(2),
+            cleanup_calls: AtomicUsize::new(0),
+        });
+        let mut manager = MCPServerManager::new(vec![
+            stable.clone() as Arc<dyn MCPServer>,
+            flaky.clone() as Arc<dyn MCPServer>,
+        ]);
+        manager.drop_failed_servers = false;
+
+        manager
+            .connect_all()
+            .await
+            .expect("initial connect should succeed");
+        assert_eq!(
+            manager.active_server_names(),
+            vec!["stable".to_owned(), "flaky".to_owned()]
+        );
+        assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
+
+        manager.strict = true;
+        let error = manager
+            .connect_all()
+            .await
+            .err()
+            .expect("strict connect should fail");
+
+        assert!(error.to_string().contains("connect failed"));
+        assert_eq!(
+            manager.active_server_names(),
+            vec!["stable".to_owned(), "flaky".to_owned()]
+        );
         assert_eq!(manager.failed_servers, vec!["flaky".to_owned()]);
         assert_eq!(stable.cleanup_calls.load(Ordering::SeqCst), 1);
         assert_eq!(flaky.cleanup_calls.load(Ordering::SeqCst), 1);

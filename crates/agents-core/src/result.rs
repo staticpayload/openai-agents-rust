@@ -7,6 +7,7 @@ use crate::agent::Agent;
 use crate::guardrail::{InputGuardrailResult, OutputGuardrailResult};
 use crate::items::{InputItem, OutputItem, RunItem};
 use crate::model::ModelResponse;
+use crate::run_config::ReasoningItemIdPolicy;
 use crate::run_state::{RunInterruption, RunState, RunStateContextSnapshot};
 use crate::stream_events::StreamEvent;
 use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult};
@@ -23,12 +24,21 @@ pub struct AgentToolInvocation {
     pub agent_name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToInputListMode {
+    #[default]
+    PreserveAll,
+    Normalized,
+}
+
 /// Result of an agent run.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RunResult {
     pub agent_name: String,
     pub last_agent: Option<Agent>,
     pub input: Vec<InputItem>,
+    pub normalized_input: Option<Vec<InputItem>>,
     pub output: Vec<OutputItem>,
     pub new_items: Vec<RunItem>,
     pub raw_responses: Vec<ModelResponse>,
@@ -45,6 +55,8 @@ pub struct RunResult {
     pub conversation_id: Option<String>,
     pub previous_response_id: Option<String>,
     pub auto_previous_response_id: bool,
+    pub reasoning_item_id_policy: ReasoningItemIdPolicy,
+    pub normalized_new_items: Option<Vec<RunItem>>,
     pub agent_tool_invocation: Option<AgentToolInvocation>,
 }
 
@@ -58,8 +70,28 @@ impl RunResult {
     }
 
     pub fn to_input_list(&self) -> Vec<InputItem> {
-        let mut items = self.input.clone();
-        items.extend(self.new_items.iter().filter_map(RunItem::to_input_item));
+        self.to_input_list_mode(ToInputListMode::PreserveAll)
+    }
+
+    pub fn to_input_list_mode(&self, mode: ToInputListMode) -> Vec<InputItem> {
+        let new_items = match mode {
+            ToInputListMode::PreserveAll => &self.new_items,
+            ToInputListMode::Normalized => self
+                .normalized_new_items
+                .as_ref()
+                .unwrap_or(&self.new_items),
+        };
+        let mut items = match mode {
+            ToInputListMode::PreserveAll => self.input.clone(),
+            ToInputListMode::Normalized => self
+                .normalized_input
+                .clone()
+                .unwrap_or_else(|| self.input.clone()),
+        };
+        items.extend(run_items_to_input_items(
+            new_items,
+            self.reasoning_item_id_policy,
+        ));
         items
     }
 
@@ -75,6 +107,10 @@ impl RunResult {
         self.previous_response_id.as_deref()
     }
 
+    pub fn last_response(&self) -> Option<&ModelResponse> {
+        self.raw_responses.last()
+    }
+
     pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
         self.agent_tool_invocation.as_ref()
     }
@@ -87,12 +123,15 @@ pub struct RunResultStreaming {
     pub max_turns: usize,
     pub is_complete: bool,
     pub final_output: Option<Value>,
+    pub normalized_input: Option<Vec<InputItem>>,
     pub new_items: Vec<RunItem>,
     pub raw_responses: Vec<ModelResponse>,
     pub input_guardrail_results: Vec<InputGuardrailResult>,
     pub output_guardrail_results: Vec<OutputGuardrailResult>,
     pub events: Vec<StreamEvent>,
     pub final_run_result: Option<RunResult>,
+    pub reasoning_item_id_policy: ReasoningItemIdPolicy,
+    pub normalized_new_items: Option<Vec<RunItem>>,
     pub agent_tool_invocation: Option<AgentToolInvocation>,
 }
 
@@ -113,21 +152,47 @@ impl RunResultStreaming {
             max_turns,
             is_complete: true,
             final_output,
+            normalized_input: result.normalized_input.clone(),
             new_items: result.new_items.clone(),
             raw_responses: result.raw_responses.clone(),
             input_guardrail_results: result.input_guardrail_results.clone(),
             output_guardrail_results: result.output_guardrail_results.clone(),
             events,
+            reasoning_item_id_policy: result.reasoning_item_id_policy,
+            normalized_new_items: result.normalized_new_items.clone(),
             agent_tool_invocation: result.agent_tool_invocation.clone(),
             final_run_result: Some(result),
         }
     }
 
     pub fn to_input_list(&self) -> Vec<InputItem> {
+        self.to_input_list_mode(ToInputListMode::PreserveAll)
+    }
+
+    pub fn to_input_list_mode(&self, mode: ToInputListMode) -> Vec<InputItem> {
         self.final_run_result
             .as_ref()
-            .map(RunResult::to_input_list)
-            .unwrap_or_default()
+            .map(|result| result.to_input_list_mode(mode))
+            .unwrap_or_else(|| {
+                let new_items = match mode {
+                    ToInputListMode::PreserveAll => &self.new_items,
+                    ToInputListMode::Normalized => self
+                        .normalized_new_items
+                        .as_ref()
+                        .unwrap_or(&self.new_items),
+                };
+                let mut items = match mode {
+                    ToInputListMode::PreserveAll => Vec::new(),
+                    ToInputListMode::Normalized => {
+                        self.normalized_input.clone().unwrap_or_default()
+                    }
+                };
+                items.extend(run_items_to_input_items(
+                    new_items,
+                    self.reasoning_item_id_policy,
+                ));
+                items
+            })
     }
 
     pub fn stream_events(&self) -> BoxStream<'static, StreamEvent> {
@@ -137,6 +202,26 @@ impl RunResultStreaming {
     pub fn agent_tool_invocation(&self) -> Option<&AgentToolInvocation> {
         self.agent_tool_invocation.as_ref()
     }
+
+    pub fn last_response(&self) -> Option<&ModelResponse> {
+        self.final_run_result
+            .as_ref()
+            .and_then(RunResult::last_response)
+            .or_else(|| self.raw_responses.last())
+    }
+}
+
+fn run_items_to_input_items(
+    run_items: &[RunItem],
+    reasoning_item_id_policy: ReasoningItemIdPolicy,
+) -> Vec<InputItem> {
+    run_items
+        .iter()
+        .filter_map(|run_item| match (run_item, reasoning_item_id_policy) {
+            (RunItem::Reasoning { .. }, ReasoningItemIdPolicy::Omit) => run_item.to_input_item(),
+            _ => run_item.to_input_item(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -167,6 +252,7 @@ mod tests {
                     namespace: None,
                 },
             ],
+            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
             ..RunResult::default()
         };
 
@@ -223,6 +309,7 @@ mod tests {
         let result = RunResult {
             conversation_id: Some("conv_123".to_owned()),
             previous_response_id: Some("resp_123".to_owned()),
+            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
             ..RunResult::default()
         };
         let response = ModelResponse {
@@ -238,5 +325,38 @@ mod tests {
         assert_eq!(result.conversation_id(), Some("conv_123"));
         assert_eq!(result.previous_response_id(), Some("resp_123"));
         assert_eq!(response.to_input_items().len(), 1);
+    }
+
+    #[test]
+    fn exposes_normalized_replay_separately_from_preserve_all_history() {
+        let result = RunResult {
+            input: vec![InputItem::from("start")],
+            normalized_input: Some(vec![InputItem::from("normalized-start")]),
+            new_items: vec![
+                RunItem::MessageOutput {
+                    content: OutputItem::Text {
+                        text: "preserve".to_owned(),
+                    },
+                },
+                RunItem::HandoffOutput {
+                    source_agent: "router".to_owned(),
+                },
+            ],
+            normalized_new_items: Some(vec![RunItem::MessageOutput {
+                content: OutputItem::Text {
+                    text: "normalized".to_owned(),
+                },
+            }]),
+            reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
+            ..RunResult::default()
+        };
+
+        let preserve_all = result.to_input_list_mode(ToInputListMode::PreserveAll);
+        let normalized = result.to_input_list_mode(ToInputListMode::Normalized);
+
+        assert_eq!(preserve_all.len(), 3);
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[0].as_text(), Some("normalized-start"));
+        assert_eq!(normalized[1].as_text(), Some("normalized"));
     }
 }

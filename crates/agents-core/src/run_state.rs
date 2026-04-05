@@ -58,6 +58,7 @@ pub struct RunState {
     pub current_turn: usize,
     pub current_agent: Option<Agent>,
     pub original_input: Vec<InputItem>,
+    pub normalized_input: Option<Vec<InputItem>>,
     pub model_responses: Vec<ModelResponse>,
     pub generated_items: Vec<RunItem>,
     pub session_items: Vec<RunItem>,
@@ -83,6 +84,7 @@ impl Default for RunState {
             current_turn: 0,
             current_agent: None,
             original_input: Vec::new(),
+            normalized_input: None,
             model_responses: Vec::new(),
             generated_items: Vec::new(),
             session_items: Vec::new(),
@@ -263,7 +265,10 @@ impl RunState {
     }
 
     pub fn resume_input(&self) -> Vec<InputItem> {
-        let mut input = self.original_input.clone();
+        let mut input = self
+            .normalized_input
+            .clone()
+            .unwrap_or_else(|| self.original_input.clone());
         input.extend(
             self.generated_items
                 .iter()
@@ -336,6 +341,7 @@ mod tests {
         .expect("run state should build");
 
         state.mark_turn_started();
+        state.normalized_input = Some(vec![InputItem::from("normalized-start")]);
         state.push_generated_item(RunItem::Reasoning {
             text: "thinking".to_owned(),
         });
@@ -360,6 +366,7 @@ mod tests {
 
         assert_eq!(state.current_turn, 1);
         assert_eq!(resume_input.len(), 3);
+        assert_eq!(resume_input[0].as_text(), Some("normalized-start"));
         assert!(state.is_interrupted());
         assert_eq!(
             state.approval("tool-1").map(|record| record.approved),

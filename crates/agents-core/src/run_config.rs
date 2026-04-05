@@ -14,6 +14,7 @@ use crate::model::ModelProvider;
 use crate::model_settings::ModelSettings;
 use crate::run_context::{RunContext, RunContextWrapper};
 use crate::run_error_handlers::RunErrorHandlers;
+use crate::session::Session;
 use crate::tracing::TracingConfig;
 
 pub const DEFAULT_MAX_TURNS: usize = 10;
@@ -204,9 +205,39 @@ impl Default for RunConfig {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RunOptions<TContext = RunContext> {
     pub context: Option<TContext>,
     pub max_turns: Option<usize>,
+    pub hooks: Option<SharedRunHooks>,
+    pub error_handlers: Option<RunErrorHandlers>,
     pub run_config: Option<RunConfig>,
+    pub session: Option<Arc<dyn Session + Sync>>,
+    pub previous_response_id: Option<String>,
+    pub auto_previous_response_id: Option<bool>,
+    pub conversation_id: Option<String>,
+    pub model_provider: Option<Arc<dyn ModelProvider>>,
+}
+
+impl<TContext> std::fmt::Debug for RunOptions<TContext>
+where
+    TContext: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RunOptions")
+            .field("context", &self.context)
+            .field("max_turns", &self.max_turns)
+            .field("hooks", &self.hooks.as_ref().map(|_| "<hooks>"))
+            .field("error_handlers", &self.error_handlers)
+            .field("run_config", &self.run_config)
+            .field("session", &self.session.as_ref().map(|_| "<session>"))
+            .field("previous_response_id", &self.previous_response_id)
+            .field("auto_previous_response_id", &self.auto_previous_response_id)
+            .field("conversation_id", &self.conversation_id)
+            .field(
+                "model_provider",
+                &self.model_provider.as_ref().map(|_| "<provider>"),
+            )
+            .finish()
+    }
 }

@@ -14,7 +14,8 @@ pub mod history;
 pub use history::{
     DEFAULT_CONVERSATION_HISTORY_END, DEFAULT_CONVERSATION_HISTORY_START,
     default_handoff_history_mapper, get_conversation_history_wrappers, nest_handoff_history,
-    reset_conversation_history_wrappers, set_conversation_history_wrappers,
+    nest_handoff_history_with_mapper, reset_conversation_history_wrappers,
+    set_conversation_history_wrappers,
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

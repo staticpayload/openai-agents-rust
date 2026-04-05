@@ -105,7 +105,8 @@ pub use handoff::{
     DEFAULT_CONVERSATION_HISTORY_END, DEFAULT_CONVERSATION_HISTORY_START, Handoff, HandoffBuilder,
     HandoffHistoryMapper, HandoffInputData, HandoffInputFilter, default_handoff_history_mapper,
     get_conversation_history_wrappers, handoff, nest_handoff_history,
-    reset_conversation_history_wrappers, set_conversation_history_wrappers,
+    nest_handoff_history_with_mapper, reset_conversation_history_wrappers,
+    set_conversation_history_wrappers,
 };
 pub use items::{
     CompactionItem, HandoffCallItem, HandoffOutputItem, InputItem, ItemHelpers,
@@ -136,16 +137,15 @@ pub use prompts::{
     DynamicPromptFunction, GenerateDynamicPromptData, Prompt, PromptSpec, PromptUtil,
 };
 pub use repl::run_demo_loop;
-pub use result::RunResult;
-pub use result::{AgentToolInvocation, RunResultStreaming};
+pub use result::{AgentToolInvocation, RunResult, RunResultStreaming, ToInputListMode};
 pub use retry::{
     ModelRetryAdvice, ModelRetryAdviceRequest, ModelRetryBackoffSettings,
     ModelRetryNormalizedError, ModelRetrySettings, RetryDecision, RetryPolicy, RetryPolicyContext,
     retry_policies,
 };
 pub use run::{
-    AgentRunner, Runner, get_default_agent_runner, run, run_streamed, run_sync, run_with_session,
-    set_default_agent_runner,
+    AgentRunner, Runner, get_default_agent_runner, run, run_streamed, run_streamed_with_options,
+    run_sync, run_sync_with_options, run_with_options, run_with_session, set_default_agent_runner,
 };
 pub use run_config::{
     CallModelData, DEFAULT_MAX_TURNS, ModelInputData, ReasoningItemIdPolicy, RunConfig, RunOptions,

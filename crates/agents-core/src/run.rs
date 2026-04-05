@@ -5,6 +5,7 @@ use uuid::Uuid;
 use crate::agent::Agent;
 use crate::errors::Result;
 use crate::exceptions::{MaxTurnsExceeded, ModelBehaviorError, UserError};
+use crate::handoff::{Handoff, HandoffInputData, nest_handoff_history_with_mapper};
 use crate::internal::agent_runner_helpers as internal_agent_runner_helpers;
 use crate::internal::error_handlers as internal_error_handlers;
 use crate::internal::guardrails as internal_guardrails;
@@ -20,7 +21,7 @@ use crate::items::{InputItem, OutputItem, RunItem};
 use crate::lifecycle::{SharedAgentHooks, SharedRunHooks};
 use crate::model::{ModelProvider, ModelRequest, ModelResponse, get_default_model_settings};
 use crate::result::{RunResult, RunResultStreaming};
-use crate::run_config::{DEFAULT_MAX_TURNS, ModelInputData, RunConfig};
+use crate::run_config::{DEFAULT_MAX_TURNS, ModelInputData, RunConfig, RunOptions};
 use crate::run_error_handlers::{RunErrorData, RunErrorHandlerInput};
 use crate::run_state::{RunInterruptionKind, RunState};
 use crate::session::Session;
@@ -37,6 +38,21 @@ pub struct Runner {
 }
 
 pub type AgentRunner = Runner;
+
+#[derive(Clone)]
+struct ResolvedRunCall {
+    runner: Runner,
+    context: Option<crate::run_context::RunContextWrapper>,
+    session: Option<Arc<dyn Session + Sync>>,
+}
+
+#[derive(Debug)]
+struct HandoffTransition {
+    input_history: Vec<InputItem>,
+    pre_handoff_items: Vec<RunItem>,
+    normalized_step_items: Vec<RunItem>,
+    session_step_items: Vec<RunItem>,
+}
 
 fn default_agent_runner_cell() -> &'static RwLock<AgentRunner> {
     static DEFAULT_AGENT_RUNNER: OnceLock<RwLock<AgentRunner>> = OnceLock::new();
@@ -78,7 +94,55 @@ impl Runner {
         self
     }
 
+    fn resolve_run_call(&self, options: RunOptions) -> ResolvedRunCall {
+        let mut runner = self.clone();
+        if let Some(model_provider) = options.model_provider {
+            runner.model_provider = Some(model_provider);
+        }
+
+        if let Some(run_config) = options.run_config {
+            runner.config = run_config;
+        }
+        if let Some(max_turns) = options.max_turns {
+            runner.config.max_turns = max_turns;
+        }
+        if let Some(hooks) = options.hooks {
+            runner.config.run_hooks = Some(hooks);
+        }
+        if let Some(error_handlers) = options.error_handlers {
+            runner.config.run_error_handlers = error_handlers;
+        }
+        if options.previous_response_id.is_some() {
+            runner.config.previous_response_id = options.previous_response_id;
+        }
+        if let Some(auto_previous_response_id) = options.auto_previous_response_id {
+            runner.config.auto_previous_response_id = auto_previous_response_id;
+        }
+        if options.conversation_id.is_some() {
+            runner.config.conversation_id = options.conversation_id;
+        }
+
+        let context = options
+            .context
+            .map(crate::run_context::RunContextWrapper::new);
+
+        ResolvedRunCall {
+            runner,
+            context,
+            session: options.session,
+        }
+    }
+
     pub fn run_sync(&self, agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
+        self.run_sync_with_options(agent, vec![input.into()], RunOptions::default())
+    }
+
+    pub fn run_sync_with_options(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        options: RunOptions,
+    ) -> Result<RunResult> {
         if tokio::runtime::Handle::try_current().is_ok() {
             return Err(UserError {
                 message:
@@ -94,11 +158,46 @@ impl Runner {
             .map_err(|error| UserError {
                 message: format!("failed to create runtime for run_sync(): {error}"),
             })?
-            .block_on(self.run(agent, input))
+            .block_on(self.run_with_options(agent, input, options))
     }
 
     pub async fn run(&self, agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
-        self.run_items(agent, vec![input.into()]).await
+        self.run_with_options(agent, vec![input.into()], RunOptions::default())
+            .await
+    }
+
+    pub async fn run_with_options(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        options: RunOptions,
+    ) -> Result<RunResult> {
+        let resolved = self.resolve_run_call(options);
+        if let Some(session) = resolved.session {
+            resolved
+                .runner
+                .run_items_with_session_and_context(
+                    agent,
+                    input,
+                    session.as_ref(),
+                    resolved.context.unwrap_or_else(|| {
+                        crate::run_context::RunContextWrapper::new(
+                            crate::run_context::RunContext::default(),
+                        )
+                    }),
+                )
+                .await
+        } else if let Some(context) = resolved.context {
+            resolved
+                .runner
+                .run_items_with_context(agent, input, context)
+                .await
+        } else {
+            resolved
+                .runner
+                .run_items_internal(agent, input.clone(), input, None, None)
+                .await
+        }
     }
 
     pub async fn run_streamed(
@@ -106,11 +205,56 @@ impl Runner {
         agent: &Agent,
         input: impl Into<InputItem>,
     ) -> Result<RunResultStreaming> {
-        self.run_items_streamed(agent, vec![input.into()]).await
+        self.run_streamed_with_options(agent, vec![input.into()], RunOptions::default())
+            .await
+    }
+
+    pub async fn run_streamed_with_options(
+        &self,
+        agent: &Agent,
+        input: Vec<InputItem>,
+        options: RunOptions,
+    ) -> Result<RunResultStreaming> {
+        let resolved = self.resolve_run_call(options);
+        let max_turns = resolved.runner.config.max_turns;
+        let result = if let Some(session) = resolved.session {
+            resolved
+                .runner
+                .run_items_with_session_and_context(
+                    agent,
+                    input,
+                    session.as_ref(),
+                    resolved.context.unwrap_or_else(|| {
+                        crate::run_context::RunContextWrapper::new(
+                            crate::run_context::RunContext::default(),
+                        )
+                    }),
+                )
+                .await?
+        } else if let Some(context) = resolved.context {
+            resolved
+                .runner
+                .run_items_with_context(agent, input, context)
+                .await?
+        } else {
+            resolved
+                .runner
+                .run_items_internal(agent, input.clone(), input, None, None)
+                .await?
+        };
+        let current_turn = result.raw_responses.len();
+        let events = internal_streaming::result_to_stream_events(agent, &result);
+
+        Ok(RunResultStreaming::from_run_result(
+            result,
+            current_turn,
+            max_turns,
+            events,
+        ))
     }
 
     pub async fn run_items(&self, agent: &Agent, input: Vec<InputItem>) -> Result<RunResult> {
-        self.run_items_internal(agent, input.clone(), input, None, None)
+        self.run_with_options(agent, input, RunOptions::default())
             .await
     }
 
@@ -119,16 +263,8 @@ impl Runner {
         agent: &Agent,
         input: Vec<InputItem>,
     ) -> Result<RunResultStreaming> {
-        let result = self.run_items(agent, input).await?;
-        let current_turn = result.raw_responses.len();
-        let events = internal_streaming::result_to_stream_events(agent, &result);
-
-        Ok(RunResultStreaming::from_run_result(
-            result,
-            current_turn,
-            self.config.max_turns,
-            events,
-        ))
+        self.run_streamed_with_options(agent, input, RunOptions::default())
+            .await
     }
 
     pub async fn run_with_session(
@@ -255,7 +391,9 @@ impl Runner {
         .await?;
 
         let mut current_agent = agent.clone();
-        let mut generated_items = Vec::new();
+        let mut current_input_history = base_input;
+        let mut normalized_generated_items = Vec::new();
+        let mut session_generated_items = Vec::new();
         let mut raw_responses = Vec::new();
         let mut usage = Usage::default();
         let mut output_guardrail_results = Vec::new();
@@ -269,8 +407,8 @@ impl Runner {
 
         for _turn in 0..self.config.max_turns {
             let prepared_input = internal_items::prepare_model_input_items(
-                &base_input,
-                &generated_items,
+                &current_input_history,
+                &normalized_generated_items,
                 self.config.reasoning_item_id_policy,
             );
             let model_data = internal_turn_preparation::maybe_filter_model_input(
@@ -300,12 +438,9 @@ impl Runner {
 
             let output = response.output.clone();
             let response_items = internal_turn_resolution::build_message_output_items(&output);
-            generated_items.extend(response_items);
             raw_responses.push(response);
 
-            if let Some(target_agent) =
-                internal_tool_execution::resolve_handoff_agent(&current_agent, &output)?
-            {
+            if let Some((handoff, target_agent)) = resolve_handoff(&current_agent, &output)? {
                 dispatch_handoff(
                     self.config.run_hooks.as_ref(),
                     target_agent.hooks.as_ref(),
@@ -321,9 +456,23 @@ impl Runner {
                 );
                 provider.start_span(&mut span, true);
                 provider.finish_span(&mut span, true);
-                generated_items.push(RunItem::HandoffOutput {
+                let mut step_items = response_items;
+                step_items.push(RunItem::HandoffOutput {
                     source_agent: current_agent.name.clone(),
                 });
+                let handoff_transition = apply_handoff_transition(
+                    &self.config,
+                    &handoff,
+                    &current_input_history,
+                    &normalized_generated_items,
+                    step_items,
+                )
+                .await?;
+                current_input_history = handoff_transition.input_history;
+                normalized_generated_items = handoff_transition.pre_handoff_items.clone();
+                normalized_generated_items.extend(handoff_transition.normalized_step_items);
+                session_generated_items = handoff_transition.pre_handoff_items;
+                session_generated_items.extend(handoff_transition.session_step_items);
                 current_agent = target_agent;
                 dispatch_agent_start(
                     self.config.run_hooks.as_ref(),
@@ -335,6 +484,8 @@ impl Runner {
                 .await;
                 continue;
             }
+            normalized_generated_items.extend(response_items.clone());
+            session_generated_items.extend(response_items);
 
             let tool_calls = internal_tool_execution::extract_tool_calls(&output);
             let all_output_guardrails = merged_output_guardrails(&current_agent, &self.config);
@@ -378,7 +529,8 @@ impl Runner {
                             Some(internal_error_handlers::format_final_output_text(&value));
                         final_output_items =
                             vec![internal_error_handlers::create_message_output_item(&value)];
-                        generated_items.extend(tool_outcome.new_items);
+                        normalized_generated_items.extend(tool_outcome.new_items.clone());
+                        session_generated_items.extend(tool_outcome.new_items);
                         tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
                         tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
                         dispatch_agent_end(
@@ -396,7 +548,8 @@ impl Runner {
             }
             tool_input_guardrail_results.extend(tool_outcome.input_guardrail_results);
             tool_output_guardrail_results.extend(tool_outcome.output_guardrail_results);
-            generated_items.extend(tool_outcome.new_items);
+            normalized_generated_items.extend(tool_outcome.new_items.clone());
+            session_generated_items.extend(tool_outcome.new_items);
             if !tool_outcome.interruptions.is_empty() {
                 interruptions = tool_outcome.interruptions;
                 break;
@@ -413,8 +566,8 @@ impl Runner {
 
             if let Some(handler) = &self.config.run_error_handlers.max_turns {
                 let history = internal_items::prepare_model_input_items(
-                    &base_input,
-                    &generated_items,
+                    &current_input_history,
+                    &normalized_generated_items,
                     self.config.reasoning_item_id_policy,
                 );
                 let handler_result = handler(RunErrorHandlerInput {
@@ -424,7 +577,7 @@ impl Runner {
                     context: context.clone(),
                     run_data: RunErrorData {
                         input: original_input.clone(),
-                        new_items: generated_items.clone(),
+                        new_items: session_generated_items.clone(),
                         history,
                         output: final_output_items.clone(),
                         raw_responses: raw_responses.clone(),
@@ -445,9 +598,11 @@ impl Runner {
                         final_output = Some(text);
                         final_output_items = vec![output_item.clone()];
                         if include_in_history {
-                            generated_items.push(RunItem::MessageOutput {
+                            let history_item = RunItem::MessageOutput {
                                 content: output_item,
-                            });
+                            };
+                            normalized_generated_items.push(history_item.clone());
+                            session_generated_items.push(history_item);
                         }
                     }
                 } else {
@@ -464,7 +619,7 @@ impl Runner {
             internal_session_persistence::save_result_to_session(
                 session,
                 &original_input,
-                &generated_items,
+                &session_generated_items,
             )
             .await?
         } else {
@@ -482,8 +637,10 @@ impl Runner {
         run_state.set_trace(trace.clone());
         conversation_tracker.apply_to_state(&mut run_state);
         run_state.persisted_item_count = persisted_item_count;
-        run_state.extend_generated_items(generated_items.clone());
-        run_state.extend_session_items(generated_items.clone());
+        run_state.normalized_input =
+            (current_input_history != original_input).then_some(current_input_history.clone());
+        run_state.extend_generated_items(normalized_generated_items.clone());
+        run_state.extend_session_items(session_generated_items.clone());
         for result in input_guardrail_results.iter().cloned() {
             run_state.record_input_guardrail_result(result);
         }
@@ -504,12 +661,15 @@ impl Runner {
         }
         let trace = trace_manager.finish();
         run_state.set_trace(trace.clone());
+        let normalized_result_items = (normalized_generated_items != session_generated_items)
+            .then_some(normalized_generated_items.clone());
 
         Ok(RunResult {
             agent_name: agent.name.clone(),
             last_agent: Some(current_agent),
             input: original_input,
-            new_items: generated_items,
+            normalized_input: run_state.normalized_input.clone(),
+            new_items: session_generated_items,
             raw_responses,
             output: final_output_items,
             final_output,
@@ -525,6 +685,8 @@ impl Runner {
             conversation_id: conversation_tracker.conversation_id.clone(),
             previous_response_id: conversation_tracker.previous_response_id.clone(),
             auto_previous_response_id: conversation_tracker.auto_previous_response_id,
+            reasoning_item_id_policy: self.config.reasoning_item_id_policy,
+            normalized_new_items: normalized_result_items,
             agent_tool_invocation: None,
         })
     }
@@ -558,10 +720,20 @@ impl Runner {
 
         let mut result = runner.run_items(&agent, state.resume_input()).await?;
 
-        let mut merged_new_items = state.generated_items.clone();
-        merged_new_items.extend(result.new_items.clone());
+        let result_preserve_items = result.new_items.clone();
+        let result_normalized_items = result
+            .normalized_new_items
+            .clone()
+            .unwrap_or_else(|| result.new_items.clone());
+        let mut merged_new_items = state.session_items.clone();
+        merged_new_items.extend(result_preserve_items);
+        let mut merged_normalized_items = state.generated_items.clone();
+        merged_normalized_items.extend(result_normalized_items);
         result.input = state.original_input.clone();
+        result.normalized_input = state.normalized_input.clone();
         result.new_items = merged_new_items;
+        result.normalized_new_items =
+            (merged_normalized_items != result.new_items).then_some(merged_normalized_items);
 
         let mut merged_raw_responses = state.model_responses.clone();
         merged_raw_responses.extend(result.raw_responses.clone());
@@ -589,6 +761,8 @@ impl Runner {
             result.conversation_id = resumed_state.conversation_id.clone();
             result.previous_response_id = resumed_state.previous_response_id.clone();
             result.auto_previous_response_id = resumed_state.auto_previous_response_id;
+            result.reasoning_item_id_policy = resumed_state.reasoning_item_id_policy;
+            result.normalized_input = resumed_state.normalized_input.clone();
         }
 
         result.trace = state.trace.clone().or(result.trace);
@@ -681,10 +855,20 @@ impl Runner {
             .run_items(agent, continued_state.resume_input())
             .await?;
 
-        let mut merged_new_items = continued_state.generated_items.clone();
-        merged_new_items.extend(result.new_items.clone());
+        let result_preserve_items = result.new_items.clone();
+        let result_normalized_items = result
+            .normalized_new_items
+            .clone()
+            .unwrap_or_else(|| result.new_items.clone());
+        let mut merged_new_items = continued_state.session_items.clone();
+        merged_new_items.extend(result_preserve_items);
+        let mut merged_normalized_items = continued_state.generated_items.clone();
+        merged_normalized_items.extend(result_normalized_items);
         result.input = continued_state.original_input.clone();
+        result.normalized_input = continued_state.normalized_input.clone();
         result.new_items = merged_new_items;
+        result.normalized_new_items =
+            (merged_normalized_items != result.new_items).then_some(merged_normalized_items);
 
         let mut merged_raw_responses = continued_state.model_responses.clone();
         merged_raw_responses.extend(result.raw_responses.clone());
@@ -713,6 +897,8 @@ impl Runner {
             result.conversation_id = resumed_state.conversation_id.clone();
             result.previous_response_id = resumed_state.previous_response_id.clone();
             result.auto_previous_response_id = resumed_state.auto_previous_response_id;
+            result.reasoning_item_id_policy = resumed_state.reasoning_item_id_policy;
+            result.normalized_input = resumed_state.normalized_input.clone();
         }
 
         result.trace = continued_state.trace.clone().or(result.trace);
@@ -852,6 +1038,16 @@ pub async fn run(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult
     get_default_agent_runner().run(agent, input).await
 }
 
+pub async fn run_with_options(
+    agent: &Agent,
+    input: Vec<InputItem>,
+    options: RunOptions,
+) -> Result<RunResult> {
+    get_default_agent_runner()
+        .run_with_options(agent, input, options)
+        .await
+}
+
 pub async fn run_with_session(
     agent: &Agent,
     input: impl Into<InputItem>,
@@ -869,8 +1065,131 @@ pub async fn run_streamed(
     get_default_agent_runner().run_streamed(agent, input).await
 }
 
+pub async fn run_streamed_with_options(
+    agent: &Agent,
+    input: Vec<InputItem>,
+    options: RunOptions,
+) -> Result<RunResultStreaming> {
+    get_default_agent_runner()
+        .run_streamed_with_options(agent, input, options)
+        .await
+}
+
 pub fn run_sync(agent: &Agent, input: impl Into<InputItem>) -> Result<RunResult> {
     get_default_agent_runner().run_sync(agent, input)
+}
+
+pub fn run_sync_with_options(
+    agent: &Agent,
+    input: Vec<InputItem>,
+    options: RunOptions,
+) -> Result<RunResult> {
+    get_default_agent_runner().run_sync_with_options(agent, input, options)
+}
+
+fn resolve_handoff(
+    current_agent: &Agent,
+    output: &[OutputItem],
+) -> Result<Option<(Handoff, Agent)>> {
+    let target = output.iter().find_map(|item| match item {
+        OutputItem::Handoff { target_agent } => Some(target_agent.as_str()),
+        _ => None,
+    });
+
+    let Some(target) = target else {
+        return Ok(None);
+    };
+
+    let handoff =
+        current_agent
+            .find_handoff(target)
+            .cloned()
+            .ok_or_else(|| ModelBehaviorError {
+                message: format!(
+                    "model requested unknown handoff target `{}` from agent `{}`",
+                    target, current_agent.name
+                ),
+            })?;
+
+    let target_agent = handoff.runtime_agent().cloned().ok_or_else(|| UserError {
+        message: format!(
+            "handoff target `{}` is not bound to a runtime agent instance",
+            target
+        ),
+    })?;
+
+    Ok(Some((handoff, target_agent)))
+}
+
+async fn apply_handoff_transition(
+    run_config: &RunConfig,
+    handoff: &Handoff,
+    input_history: &[InputItem],
+    pre_handoff_items: &[RunItem],
+    new_step_items: Vec<RunItem>,
+) -> Result<HandoffTransition> {
+    let input_filter = handoff
+        .input_filter
+        .clone()
+        .or_else(|| run_config.handoff_input_filter.clone());
+    let should_nest_history = handoff
+        .nest_handoff_history
+        .unwrap_or(run_config.nest_handoff_history);
+
+    if let Some(input_filter) = input_filter {
+        let filtered = input_filter(HandoffInputData {
+            input_history: input_history.to_vec(),
+            pre_handoff_items: pre_handoff_items.to_vec(),
+            new_items: new_step_items,
+            input_items: None,
+        })
+        .await;
+
+        let session_step_items = filtered.new_items.clone();
+        let normalized_step_items = filtered
+            .input_items
+            .clone()
+            .unwrap_or_else(|| session_step_items.clone());
+        return Ok(HandoffTransition {
+            input_history: filtered.input_history,
+            pre_handoff_items: filtered.pre_handoff_items,
+            normalized_step_items,
+            session_step_items,
+        });
+    }
+
+    if should_nest_history {
+        let nested = nest_handoff_history_with_mapper(
+            HandoffInputData {
+                input_history: input_history.to_vec(),
+                pre_handoff_items: pre_handoff_items.to_vec(),
+                new_items: new_step_items,
+                input_items: None,
+            },
+            handoff
+                .history_mapper
+                .clone()
+                .or_else(|| run_config.handoff_history_mapper.clone()),
+        );
+        let session_step_items = nested.new_items.clone();
+        let normalized_step_items = nested
+            .input_items
+            .clone()
+            .unwrap_or_else(|| session_step_items.clone());
+        return Ok(HandoffTransition {
+            input_history: nested.input_history,
+            pre_handoff_items: nested.pre_handoff_items,
+            normalized_step_items,
+            session_step_items,
+        });
+    }
+
+    Ok(HandoffTransition {
+        input_history: input_history.to_vec(),
+        pre_handoff_items: pre_handoff_items.to_vec(),
+        normalized_step_items: new_step_items.clone(),
+        session_step_items: new_step_items,
+    })
 }
 
 fn merged_input_guardrails(
@@ -981,6 +1300,10 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
         .clone()
         .or_else(|| next.current_agent.clone());
     next.original_input = previous.original_input.clone();
+    next.normalized_input = previous
+        .normalized_input
+        .clone()
+        .or_else(|| next.normalized_input.clone());
 
     let mut model_responses = previous.model_responses.clone();
     model_responses.extend(next.model_responses.clone());
@@ -1183,6 +1506,57 @@ mod tests {
     }
 
     impl ModelProvider for RequestCaptureProvider {
+        fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+            self.model.clone()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct HandoffCaptureModel {
+        calls: Arc<Mutex<usize>>,
+        second_turn_input: Arc<Mutex<Vec<InputItem>>>,
+    }
+
+    #[async_trait]
+    impl Model for HandoffCaptureModel {
+        async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+            let mut calls = self.calls.lock().expect("handoff capture model lock");
+            *calls += 1;
+
+            if *calls == 1 {
+                return Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::Handoff {
+                        target_agent: "specialist".to_owned(),
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("resp-handoff-capture-1".to_owned()),
+                    request_id: None,
+                });
+            }
+
+            *self
+                .second_turn_input
+                .lock()
+                .expect("handoff capture input lock") = request.input.clone();
+
+            Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::Text {
+                    text: "specialist:done".to_owned(),
+                }],
+                usage: Usage::default(),
+                response_id: Some("resp-handoff-capture-2".to_owned()),
+                request_id: None,
+            })
+        }
+    }
+
+    struct HandoffCaptureProvider {
+        model: Arc<HandoffCaptureModel>,
+    }
+
+    impl ModelProvider for HandoffCaptureProvider {
         fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
             self.model.clone()
         }
@@ -1808,6 +2182,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn runner_applies_handoff_input_filter_to_normalized_history() {
+        let model = Arc::new(HandoffCaptureModel::default());
+        let provider = Arc::new(HandoffCaptureProvider {
+            model: model.clone(),
+        });
+        let specialist = Agent::builder("specialist")
+            .instructions("Handle specialist tasks.")
+            .build();
+        let handoff = Handoff::to_agent(specialist).with_input_filter(Arc::new(|_data| {
+            async move {
+                HandoffInputData {
+                    input_history: vec![InputItem::from("filtered-history")],
+                    pre_handoff_items: vec![],
+                    new_items: vec![RunItem::HandoffOutput {
+                        source_agent: "assistant".to_owned(),
+                    }],
+                    input_items: Some(vec![RunItem::MessageOutput {
+                        content: OutputItem::Text {
+                            text: "filtered-item".to_owned(),
+                        },
+                    }]),
+                }
+            }
+            .boxed()
+        }));
+        let agent = Agent::builder("assistant").handoff(handoff).build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("handoff run should succeed");
+
+        let second_turn_input = model
+            .second_turn_input
+            .lock()
+            .expect("handoff second turn input lock")
+            .clone();
+        assert_eq!(second_turn_input.len(), 2);
+        assert_eq!(second_turn_input[0].as_text(), Some("filtered-history"));
+        assert_eq!(second_turn_input[1].as_text(), Some("filtered-item"));
+        let preserve_all = result.to_input_list_mode(crate::result::ToInputListMode::PreserveAll);
+        let normalized = result.to_input_list_mode(crate::result::ToInputListMode::Normalized);
+        assert_ne!(preserve_all, normalized);
+        assert_eq!(
+            normalized.first().and_then(InputItem::as_text),
+            Some("filtered-history")
+        );
+        assert_eq!(
+            result
+                .durable_state()
+                .and_then(|state| state.normalized_input.clone())
+                .and_then(|items| items.first().cloned())
+                .and_then(|item| item.as_text().map(ToOwned::to_owned))
+                .as_deref(),
+            Some("filtered-history")
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_nests_handoff_history_for_next_agent_turn() {
+        let model = Arc::new(HandoffCaptureModel::default());
+        let provider = Arc::new(HandoffCaptureProvider {
+            model: model.clone(),
+        });
+        let specialist = Agent::builder("specialist").build();
+        let agent = Agent::builder("assistant")
+            .handoff(Handoff::to_agent(specialist).with_nest_handoff_history(true))
+            .build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("handoff run should succeed");
+
+        let second_turn_input = model
+            .second_turn_input
+            .lock()
+            .expect("handoff second turn input lock")
+            .clone();
+        let nested_history = second_turn_input
+            .first()
+            .expect("nested history should exist");
+        let nested_content = match nested_history {
+            InputItem::Json { value } => value
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            InputItem::Text { .. } => String::new(),
+        };
+
+        assert!(nested_content.contains("<CONVERSATION HISTORY>"));
+        assert!(nested_content.contains("hello"));
+        assert_eq!(
+            result
+                .to_input_list_mode(crate::result::ToInputListMode::Normalized)
+                .first()
+                .map(|item| matches!(item, InputItem::Json { .. })),
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
     async fn runner_passes_conversation_tracking_to_model_requests() {
         let model = Arc::new(RequestCaptureModel::default());
         let provider = Arc::new(RequestCaptureProvider {
@@ -1856,6 +2335,54 @@ mod tests {
                 .and_then(|state| state.conversation_id.as_deref()),
             Some("conv_123")
         );
+    }
+
+    #[tokio::test]
+    async fn runner_run_with_options_overrides_config_for_a_single_call() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(RequestCaptureProvider {
+            model: model.clone(),
+        });
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_config(RunConfig {
+                previous_response_id: Some("resp-base".to_owned()),
+                conversation_id: Some("conv-base".to_owned()),
+                ..RunConfig::default()
+            })
+            .run_with_options(
+                &agent,
+                vec![InputItem::from("hello")],
+                RunOptions {
+                    max_turns: Some(1),
+                    previous_response_id: Some("resp-options".to_owned()),
+                    conversation_id: Some("conv-options".to_owned()),
+                    model_provider: Some(provider),
+                    ..RunOptions::default()
+                },
+            )
+            .await
+            .expect("options-backed run should succeed");
+
+        assert_eq!(result.final_output.as_deref(), Some("ok"));
+        assert_eq!(
+            model
+                .previous_response_id
+                .lock()
+                .expect("previous response capture lock")
+                .as_deref(),
+            Some("resp-options")
+        );
+        assert_eq!(
+            model
+                .conversation_id
+                .lock()
+                .expect("conversation capture lock")
+                .as_deref(),
+            Some("conv-options")
+        );
+        assert_eq!(result.durable_state().map(|state| state.max_turns), Some(1));
     }
 
     #[tokio::test]

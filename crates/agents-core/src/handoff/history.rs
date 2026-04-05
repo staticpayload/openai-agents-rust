@@ -1,5 +1,6 @@
 use std::sync::{OnceLock, RwLock};
 
+use crate::handoff::HandoffHistoryMapper;
 use crate::items::{InputItem, RunItem};
 
 pub const DEFAULT_CONVERSATION_HISTORY_START: &str = "<CONVERSATION HISTORY>";
@@ -47,12 +48,21 @@ pub fn default_handoff_history_mapper(transcript: Vec<InputItem>) -> Vec<InputIt
 pub fn nest_handoff_history(
     input_data: crate::handoff::HandoffInputData,
 ) -> crate::handoff::HandoffInputData {
+    nest_handoff_history_with_mapper(input_data, None)
+}
+
+pub fn nest_handoff_history_with_mapper(
+    input_data: crate::handoff::HandoffInputData,
+    history_mapper: Option<HandoffHistoryMapper>,
+) -> crate::handoff::HandoffInputData {
     let transcript = build_transcript(
         &input_data.input_history,
         &input_data.pre_handoff_items,
         &input_data.new_items,
     );
-    let mapped_history = default_handoff_history_mapper(transcript);
+    let mapped_history = history_mapper
+        .map(|mapper| mapper(transcript.clone()))
+        .unwrap_or_else(|| default_handoff_history_mapper(transcript));
 
     crate::handoff::HandoffInputData {
         input_history: mapped_history,
@@ -221,5 +231,27 @@ mod tests {
 
         let nested = nest_handoff_history(input_data);
         assert_eq!(nested.input_history.len(), 1);
+    }
+
+    #[test]
+    fn applies_custom_history_mapper_when_requested() {
+        let input_data = crate::handoff::HandoffInputData {
+            input_history: vec![InputItem::from("hello")],
+            pre_handoff_items: vec![],
+            new_items: vec![],
+            input_items: None,
+        };
+
+        let nested = nest_handoff_history_with_mapper(
+            input_data,
+            Some(std::sync::Arc::new(|items| {
+                let mut items = items;
+                items.push(InputItem::from("mapped"));
+                items
+            })),
+        );
+
+        assert_eq!(nested.input_history.len(), 2);
+        assert_eq!(nested.input_history[1].as_text(), Some("mapped"));
     }
 }

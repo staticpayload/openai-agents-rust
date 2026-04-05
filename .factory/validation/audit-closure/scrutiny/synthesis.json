@@ -1,6 +1,6 @@
 {
   "milestone": "audit-closure",
-  "round": 2,
+  "round": 3,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,39 +20,46 @@
     }
   },
   "reviewsSummary": {
-    "total": 4,
+    "total": 3,
     "passed": 1,
-    "failed": 3,
+    "failed": 2,
     "failedFeatures": [
-      "fix-session-input-callback-duplicate-provenance",
-      "fix-mcp-strict-connect-active-server-preservation",
-      "fix-docs-contract-generic-absolute-path-detection"
+      "fix-session-input-callback-json-identity-provenance",
+      "fix-mcp-strict-preserve-failed-active-servers"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-session-input-callback-duplicate-provenance",
+      "featureId": "fix-session-input-callback-json-identity-provenance",
       "severity": "blocking",
-      "description": "`session_input_callback` provenance still falls back to history-first frequency matching for duplicate-valued JSON inputs whose identity is not tracked (objects, numbers, booleans, and null), so callback-shaped persistence can still misattribute new-turn items to history."
+      "description": "The rerun fixes non-array JSON duplicate provenance in `session_input_callback`, but it does so by adding a public `provenance` field to `InputItem::{Text, Json}`, which changes the shape of a facade-reexported public enum and creates a downstream-breaking API regression."
     },
     {
-      "featureId": "fix-mcp-strict-connect-active-server-preservation",
+      "featureId": "fix-mcp-strict-preserve-failed-active-servers",
       "severity": "blocking",
-      "description": "`MCPServerManager::connect_all()` restores only the previously connected subset on strict failure, so previously active failed servers are still dropped when `drop_failed_servers = false` instead of preserving the full prior active set."
-    },
-    {
-      "featureId": "fix-docs-contract-generic-absolute-path-detection",
-      "severity": "blocking",
-      "description": "`contains_machine_local_absolute_path` still misses forward-slash Windows drive absolute paths such as `D:/a/...`, so the docs contract remains narrower than the generic machine-local absolute-path rejection expected by the audit blocker."
+      "description": "`MCPServerManager::connect_all()` still drops the fresh-manager prior active set on the first strict failure when `drop_failed_servers = false`, so Rust remains out of parity with Python's full-active-set restoration semantics for failed servers that stay active."
     }
   ],
-  "appliedUpdates": [],
-  "suggestedGuidanceUpdates": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented in `.factory/library/parity.md` that Python's MCP manager begins with the full configured server list active, so strict-failure preservation in `drop_failed_servers = false` must include the fresh-manager first-failure case.",
+      "sourceFeature": "fix-mcp-strict-preserve-failed-active-servers"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add a coding-conventions note that adding doc-hidden or internal-only fields to public Rust enum variants is still a source-breaking API change for downstream construction and pattern matching, so internal bookkeeping must stay out of public enum layouts.",
+      "evidence": "The review for `fix-session-input-callback-json-identity-provenance` found that `crates/agents-core/src/items.rs` added a hidden `provenance` field to the publicly re-exported `InputItem::{Text, Json}` variants, forcing constructor and pattern-match changes across 17 files and introducing a new blocking API regression while fixing callback provenance.",
+      "isSystemic": false
+    }
+  ],
   "rejectedObservations": [
     {
-      "observation": "The shared `docs_audit` command omits `docs_contract` even though the docs portability and README harness are part of the audit surface.",
-      "reason": "Rejected as an ambiguous services.yaml change for the validator to apply directly: the manifest already exposes `docs_contract` separately, and changing the semantics of the existing `docs_audit` entry would be a non-additive naming/ownership decision rather than a low-risk factual update."
+      "observation": "The shared `docs_audit` command still omits the `docs_contract` suite even though the validation contract treats docs portability and README/runtime alignment as part of the docs audit surface.",
+      "reason": "Rejected again as a duplicate ambiguous services.yaml change: the manifest already exposes `docs_contract` as a separate command, and changing the existing `docs_audit` entry would be a non-additive naming/ownership decision rather than a low-risk factual update for the validator to apply directly."
     }
   ],
-  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round1.json"
+  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round2.json"
 }

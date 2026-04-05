@@ -37,3 +37,7 @@ How parity is evaluated and maintained in this mission.
 ## Realtime transport parity notes
 
 - Cloudflare realtime transport parity includes the JS common realtime header bundle on fetch-upgrade requests, including both `User-Agent` and `X-OpenAI-Agents-SDK`.
+
+## MCP manager parity notes
+
+- Python's MCP manager starts with the full configured server list in its active set before any connection attempts. For Rust parity, preserving the "prior active set" on strict failures when `drop_failed_servers = false` must therefore include the fresh-manager first-failure case, not just reconnect/retry flows.

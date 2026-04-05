@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-session-input-callback-json-identity-provenance",
+  "reviewedAt": "2026-04-05T11:26:17.617338+00:00",
+  "commitId": "895615bdda78052fecb63909d6134d990ca5f66d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The follow-up fix does resolve the original non-array JSON duplicate-provenance bug in `session_input_callback` by assigning per-item provenance before callback execution and covering object/number/bool/null regressions. However, it introduces that provenance by adding a new field to the public `InputItem::{Text, Json}` enum variants, which is a source-breaking API change for downstream callers and therefore a blocking regression.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/items.rs",
+        "line": 13,
+        "severity": "blocking",
+        "description": "`InputItem::Text` and `InputItem::Json` now carry a public `provenance` field (`crates/agents-core/src/items.rs:13-24`). Because `InputItem` is re-exported from the public facade (`crates/openai-agents/src/lib.rs:17`), this changes the construction and pattern-match shape seen by downstream crates: existing code written as `InputItem::Json { value }` or `InputItem::Text { text }` no longer compiles unless it is updated to add `..` or `provenance: None`. The feature only needed internal callback provenance tracking, so introducing an internal bookkeeping field into the public enum layout is a breaking API regression."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "The mission guidance does not explicitly warn that doc-hidden fields on public Rust enum variants are still source-breaking API changes. This fix used that pattern for internal provenance bookkeeping and ended up touching 17 files across the workspace to adapt constructors and pattern matches.",
+      "evidence": "`crates/agents-core/src/items.rs:13-24` adds the hidden `provenance` field to public `InputItem` variants; `crates/openai-agents/src/lib.rs:17` re-exports `InputItem`; commit `895615bdda78052fecb63909d6134d990ca5f66d` changes 17 files, many only to thread `provenance: None` or `..` through public constructors/pattern matches."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/audit-closure/scrutiny/reviews/fix-session-input-callback-duplicate-provenance.json",
+  "summary": "Reviewed the original failed duplicate-provenance fix, the rerun fix commit, both handoffs, the fix transcript skeleton, and the shared-state guidance. The rerun correctly addresses the prior non-array JSON attribution gap in `session_input_callback`, but the implementation fails scrutiny because it achieves that by changing the public `InputItem` enum variant shape, creating a new downstream-breaking API regression."
+}

@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-mcp-fresh-manager-active-set-restoration",
+  "reviewedAt": "2026-04-05T11:49:51Z",
+  "commitId": "d96fd8cf3c35df1575bdd8ff4358428480094f03",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Reviewed the prior failed fix (`16c5643`) and the rerun fix (`d96fd8c`). The rerun directly closes the fresh-manager kept-active gap by snapshotting both the pre-attempt connected set and the full pre-attempt active set before `connect_all()` clears state, then restoring `previous_active_servers` on strict failure when `drop_failed_servers = false`. That matches Python's `MCPServerManager`, whose constructor starts `_active_servers` with the full server list and whose strict-failure path restores `previous_active_servers` in kept-active mode. The new regression for the first strict failure plus the retained retry regression together cover the prior blocker, and I did not find any remaining correctness issue within the scoped expected behavior.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The mission's MCP contract-work note is now stale: it still says Rust lacks `drop_failed_servers = false` coverage even though the manager test suite now contains both the retry-case and fresh-manager kept-active regressions.",
+      "evidence": "/Users/staticpayload/.factory/missions/c8045f72-1cc6-4f08-ad3c-681b35cde0a4/contract-work/mcp-runtime.md:8 says the `drop_failed_servers = false` branch is not asserted, but /Users/staticpayload/Mainframe/openai-agents-rust/crates/agents-core/src/mcp/manager.rs:373 and :418 now define `strict_connect_preserves_existing_failed_active_servers_when_not_dropping_failed` and `strict_connect_restores_full_active_set_on_first_failure_when_not_dropping_failed`."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/audit-closure/scrutiny/reviews/fix-mcp-strict-preserve-failed-active-servers.json",
+  "summary": "Pass. The rerun fix addresses the exact blocker from the prior failed review: `MCPServerManager::connect_all()` now restores the full pre-attempt active set for the fresh-manager kept-active strict-failure case, matching Python semantics while preserving the connected-only restoration path when failed servers should be dropped. I reviewed the fix transcript skeleton, both MCP preservation diffs, the current Rust/Python manager implementations, and the round-3 orchestrator note; the note is now reflected in both the code/tests and `.factory/library/parity.md`."
+}

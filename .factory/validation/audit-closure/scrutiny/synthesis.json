@@ -1,6 +1,6 @@
 {
   "milestone": "audit-closure",
-  "round": 3,
+  "round": 4,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,46 +20,34 @@
     }
   },
   "reviewsSummary": {
-    "total": 3,
+    "total": 2,
     "passed": 1,
-    "failed": 2,
+    "failed": 1,
     "failedFeatures": [
-      "fix-session-input-callback-json-identity-provenance",
-      "fix-mcp-strict-preserve-failed-active-servers"
+      "fix-session-provenance-without-public-inputitem-regression"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-session-input-callback-json-identity-provenance",
+      "featureId": "fix-session-provenance-without-public-inputitem-regression",
       "severity": "blocking",
-      "description": "The rerun fixes non-array JSON duplicate provenance in `session_input_callback`, but it does so by adding a public `provenance` field to `InputItem::{Text, Json}`, which changes the shape of a facade-reexported public enum and creates a downstream-breaking API regression."
-    },
-    {
-      "featureId": "fix-mcp-strict-preserve-failed-active-servers",
-      "severity": "blocking",
-      "description": "`MCPServerManager::connect_all()` still drops the fresh-manager prior active set on the first strict failure when `drop_failed_servers = false`, so Rust remains out of parity with Python's full-active-set restoration semantics for failed servers that stay active."
+      "description": "The rerun removes the public `InputItem` shape regression, but `json_value_identity` still leaves duplicate empty JSON objects `{}` without internal identity in `crates/agents-core/src/internal/session_persistence.rs`, so `session_input_callback` persistence can still misattribute a new-turn `{}` as history."
     }
   ],
-  "appliedUpdates": [
-    {
-      "target": "library",
-      "description": "Documented in `.factory/library/parity.md` that Python's MCP manager begins with the full configured server list active, so strict-failure preservation in `drop_failed_servers = false` must include the fresh-manager first-failure case.",
-      "sourceFeature": "fix-mcp-strict-preserve-failed-active-servers"
-    }
-  ],
+  "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
-      "target": "AGENTS.md",
-      "suggestion": "Add a coding-conventions note that adding doc-hidden or internal-only fields to public Rust enum variants is still a source-breaking API change for downstream construction and pattern matching, so internal bookkeeping must stay out of public enum layouts.",
-      "evidence": "The review for `fix-session-input-callback-json-identity-provenance` found that `crates/agents-core/src/items.rs` added a hidden `provenance` field to the publicly re-exported `InputItem::{Text, Json}` variants, forcing constructor and pattern-match changes across 17 files and introducing a new blocking API regression while fixing callback provenance.",
+      "target": "skills",
+      "suggestion": "Clarify in worker startup guidance that `.factory/init.sh` must be executed as a shell script (for example `sh .factory/init.sh`), not via Python.",
+      "evidence": "The review for `fix-session-provenance-without-public-inputitem-regression` found `worker-transcripts.jsonl:16` running `python3 \"/Users/staticpayload/Mainframe/openai-agents-rust/.factory/init.sh\"` before retrying with `sh`, and the worker handoff explicitly requested that clarification in `handoff.skillFeedback.suggestedChanges[0]`.",
       "isSystemic": false
     }
   ],
   "rejectedObservations": [
     {
-      "observation": "The shared `docs_audit` command still omits the `docs_contract` suite even though the validation contract treats docs portability and README/runtime alignment as part of the docs audit surface.",
-      "reason": "Rejected again as a duplicate ambiguous services.yaml change: the manifest already exposes `docs_contract` as a separate command, and changing the existing `docs_audit` entry would be a non-additive naming/ownership decision rather than a low-risk factual update for the validator to apply directly."
+      "observation": "The mission's `contract-work/mcp-runtime.md` note still says Rust lacks `drop_failed_servers = false` coverage.",
+      "reason": "Rejected as already documented elsewhere and outside the validator's additive apply-now surfaces: `.factory/library/parity.md` already records the fresh-manager kept-active parity rule, and editing mission-local contract-work notes is not a services.yaml/library update."
     }
   ],
-  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round2.json"
+  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round3.json"
 }

@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-session-provenance-without-public-inputitem-regression",
+  "reviewedAt": "2026-04-05T11:51:30.215009+00:00",
+  "commitId": "60ce6946a389dce2258965965ba3d2ff8266ac32",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The rerun does fix the prior public-API regression: `InputItem` is back to `Text { text }` / `Json { value }` in `crates/agents-core/src/items.rs:10-12`, and the new facade regression in `crates/openai-agents/tests/openai_session_semantics.rs:115-179` proves downstream construction and pattern matching work again without `provenance` fields. But the new sidecar matcher still leaves a duplicate-JSON provenance hole for empty objects, so the feature does not yet satisfy the requirement to preserve correct attribution across duplicate JSON values without regressions.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/session_persistence.rs",
+        "line": 215,
+        "severity": "blocking",
+        "description": "`json_value_identity` only assigns object identity when `map.iter().next()` exists (`crates/agents-core/src/internal/session_persistence.rs:215-221`). For duplicate empty objects `{}`, both the history and new-turn copies therefore have no sidecar identity, and the callback matcher falls back to the history-first branch for objects (`crates/agents-core/src/internal/session_persistence.rs:55-68`). That means a callback returning the new-turn `{}` while session history already contains `{}` will still be consumed as history and never persisted as fresh input. The new regressions only cover a non-empty object plus scalar JSON values (`crates/agents-core/src/internal/session_persistence.rs:380-400`), so this remaining object case is still both incorrect and untested."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The base worker guidance still appears to leave `.factory/init.sh` invocation ambiguous. This worker first tried to run it with Python and only then retried it via `sh`, and the handoff explicitly asks for the skill to state that the init file must be executed as a shell script.",
+      "evidence": "`worker-transcripts.jsonl:16` shows `python3 \"/Users/staticpayload/Mainframe/openai-agents-rust/.factory/init.sh\"` followed later by `sh \"/Users/staticpayload/Mainframe/openai-agents-rust/.factory/init.sh\"`; `handoffs/2026-04-05T11-41-52-243Z__fix-session-provenance-without-public-inputitem-regression__976befe3-61cf-4cdc-b3fa-29df16a75aa7.json` records the same point in `handoff.skillFeedback.suggestedChanges[0]`."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/audit-closure/scrutiny/reviews/fix-session-input-callback-json-identity-provenance.json",
+  "summary": "Reviewed the fix transcript skeleton, both feature diffs, the prior failed review, and the shared-state docs/orchestrator note. The rerun does remove the public `InputItem` shape drift, but it still fails scrutiny because duplicate empty JSON objects fall back to history-first matching and remain misattributed in `session_input_callback` persistence."
+}

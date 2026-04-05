@@ -1,0 +1,65 @@
+{
+  "milestone": "audit-closure",
+  "round": 3,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test -q --workspace",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 1,
+    "failed": 2,
+    "failedFeatures": [
+      "fix-session-input-callback-json-identity-provenance",
+      "fix-mcp-strict-preserve-failed-active-servers"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "fix-session-input-callback-json-identity-provenance",
+      "severity": "blocking",
+      "description": "The rerun fixes non-array JSON duplicate provenance in `session_input_callback`, but it does so by adding a public `provenance` field to `InputItem::{Text, Json}`, which changes the shape of a facade-reexported public enum and creates a downstream-breaking API regression."
+    },
+    {
+      "featureId": "fix-mcp-strict-preserve-failed-active-servers",
+      "severity": "blocking",
+      "description": "`MCPServerManager::connect_all()` still drops the fresh-manager prior active set on the first strict failure when `drop_failed_servers = false`, so Rust remains out of parity with Python's full-active-set restoration semantics for failed servers that stay active."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented in `.factory/library/parity.md` that Python's MCP manager begins with the full configured server list active, so strict-failure preservation in `drop_failed_servers = false` must include the fresh-manager first-failure case.",
+      "sourceFeature": "fix-mcp-strict-preserve-failed-active-servers"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add a coding-conventions note that adding doc-hidden or internal-only fields to public Rust enum variants is still a source-breaking API change for downstream construction and pattern matching, so internal bookkeeping must stay out of public enum layouts.",
+      "evidence": "The review for `fix-session-input-callback-json-identity-provenance` found that `crates/agents-core/src/items.rs` added a hidden `provenance` field to the publicly re-exported `InputItem::{Text, Json}` variants, forcing constructor and pattern-match changes across 17 files and introducing a new blocking API regression while fixing callback provenance.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "The shared `docs_audit` command still omits the `docs_contract` suite even though the validation contract treats docs portability and README/runtime alignment as part of the docs audit surface.",
+      "reason": "Rejected again as a duplicate ambiguous services.yaml change: the manifest already exposes `docs_contract` as a separate command, and changing the existing `docs_audit` entry would be a non-additive naming/ownership decision rather than a low-risk factual update for the validator to apply directly."
+    }
+  ],
+  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round2.json"
+}

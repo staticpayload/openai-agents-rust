@@ -16,8 +16,8 @@ Tracked upstream families: `293`
 | --- | --- | --- | --- |
 | `test_anthropic_thinking_blocks` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
 | `test_asyncio_progress` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
-| `test_call_model_input_filter` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
-| `test_call_model_input_filter_unit` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
+| `test_call_model_input_filter` | `covered` | `crates/agents-core/src/run.rs`, `crates/openai-agents/tests/runner_semantics.rs` | Streamed and non-streamed `call_model_input_filter` rewrites plus invalid-return failures are covered. |
+| `test_call_model_input_filter_unit` | `covered` | `crates/agents-core/src/run.rs` | Core unit coverage exercises sync/async filter rewrites and invalid-return rejection. |
 | `test_cancel_streaming` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
 | `test_config` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
 | `test_debug` | `omitted-with-rationale` | `n/a` | Runner parity for this upstream family has not landed in the shared Rust runtime yet; keep it omitted until equivalent run semantics and executable tests exist. |
@@ -118,9 +118,9 @@ Tracked upstream families: `293`
 | --- | --- | --- | --- |
 | `fastapi/test_streaming_context` | `omitted-with-rationale` | `n/a` | Session parity for this upstream family is not wired through the Rust runtime yet, so it stays omitted until the session behavior and tests land. |
 | `memory/test_openai_responses_compaction_session` | `covered` | `crates/agents-openai/src/memory.rs`, `crates/openai-agents/tests/openai_session_semantics.rs` | Candidate selection, sanitization, threshold-aware compaction, previous-response-id mode, and runner-triggered compaction are covered. |
-| `test_session` | `omitted-with-rationale` | `n/a` | Session parity for this upstream family is not wired through the Rust runtime yet, so it stays omitted until the session behavior and tests land. |
-| `test_session_exceptions` | `omitted-with-rationale` | `n/a` | Session parity for this upstream family is not wired through the Rust runtime yet, so it stays omitted until the session behavior and tests land. |
-| `test_session_limit` | `omitted-with-rationale` | `n/a` | Session parity for this upstream family is not wired through the Rust runtime yet, so it stays omitted until the session behavior and tests land. |
+| `test_session` | `omitted-with-rationale` | `n/a` | Rust covers session shaping, limits, and duplicate JSON provenance except for the duplicate empty JSON object `session_input_callback` provenance edge: full Python-style object-identity parity is not safely achievable under the current Rust by-value callback API without an in-band marker or public API change. |
+| `test_session_exceptions` | `covered` | `crates/agents-core/src/run.rs` | Session-owned persistence rejects conflicting explicit conversation-tracking settings. |
+| `test_session_limit` | `covered` | `crates/agents-core/src/memory/util.rs`, `crates/agents-core/src/memory/session.rs` | Session limit helpers and MemorySession default-limit behavior are covered. |
 
 ### Model Settings / Providers
 
@@ -144,14 +144,14 @@ Tracked upstream families: `293`
 | --- | --- | --- | --- |
 | `test_openai_chatcompletions` | `covered` | `crates/agents-openai/src/models.rs` | Chat Completions payload shaping, tool choice defaults, logprobs, and response parsing are covered. |
 | `test_openai_chatcompletions_converter` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
-| `test_openai_chatcompletions_stream` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
+| `test_openai_chatcompletions_stream` | `covered` | `crates/agents-openai/src/models/chatcmpl_stream_handler.rs` | Chat Completions streaming delta ordering and final assembly are covered. |
 | `test_openai_conversations_session` | `covered` | `crates/agents-openai/src/memory.rs`, `crates/openai-agents/tests/openai_session_semantics.rs` | Session state load/save, clear behavior, remote bootstrap, and runner continuity are covered. |
 | `test_openai_responses` | `covered` | `crates/agents-openai/src/models.rs`, `crates/agents-openai/src/websocket.rs`, `crates/openai-agents/tests/openai_session_semantics.rs` | Responses payload shaping, output conversion, conversation tracking, websocket framing, and response parsing are covered. |
 | `test_openai_responses_converter` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
 | `test_responses` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
 | `test_responses_tracing` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
 | `test_responses_websocket_session` | `covered` | `crates/agents-openai/src/websocket.rs` | Responses websocket URL building, headers, query handling, and request framing are covered. |
-| `test_server_conversation_tracker` | `omitted-with-rationale` | `n/a` | OpenAI-specific parity for this upstream family remains open; leave it omitted until the corresponding provider/runtime behavior and tests ship. |
+| `test_server_conversation_tracker` | `omitted-with-rationale` | `n/a` | Rust covers sent-state rewind and filtered delta replay except when `call_model_input_filter` drops/reorders siblings and returns multiple fresh replacement items: the current callback API returns only `ModelInputData`, so exact source mapping is not safely recoverable without a provenance-aware API channel. |
 
 ### MCP
 
@@ -160,8 +160,8 @@ Tracked upstream families: `293`
 | `mcp/test_caching` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
 | `mcp/test_client_session_retries` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
 | `mcp/test_connect_disconnect` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
-| `mcp/test_mcp_approval` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
-| `mcp/test_mcp_auth_params` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
+| `mcp/test_mcp_approval` | `covered` | `crates/agents-core/src/mcp/util.rs` | `requires_approval` mapping to approval-gated MCP runtime tools is covered. |
+| `mcp/test_mcp_auth_params` | `covered` | `crates/agents-core/src/mcp/server.rs` | SSE and streamable-HTTP auth/configuration handling are covered. |
 | `mcp/test_mcp_resources` | `covered` | `crates/agents-core/src/mcp/server.rs`, `crates/openai-agents/tests/mcp_semantics.rs` | Connection-gated resource listing, template listing, and resource reads are covered. |
 | `mcp/test_mcp_server_manager` | `covered` | `crates/agents-core/src/mcp/manager.rs`, `crates/openai-agents/tests/mcp_semantics.rs` | Connect, reconnect, deduplicated failures, active tool listing, and cleanup state are covered. |
 | `mcp/test_mcp_tracing` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
@@ -169,10 +169,10 @@ Tracked upstream families: `293`
 | `mcp/test_message_handler` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
 | `mcp/test_prompt_server` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
 | `mcp/test_runner_calls_mcp` | `covered` | `crates/openai-agents/tests/mcp_semantics.rs` | Non-streamed and streamed MCP tool execution through the runner are covered. |
-| `mcp/test_server_errors` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
-| `mcp/test_streamable_http_client_factory` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
-| `mcp/test_streamable_http_session_id` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
-| `mcp/test_tool_filtering` | `omitted-with-rationale` | `n/a` | MCP parity for this upstream family is still incomplete in the Rust runtime, so it remains omitted pending executable coverage. |
+| `mcp/test_server_errors` | `covered` | `crates/openai-agents/tests/mcp_semantics.rs` | Unknown, duplicate, and failing MCP tool paths fail clearly through the shared runner. |
+| `mcp/test_streamable_http_client_factory` | `covered` | `crates/agents-core/src/mcp/server.rs` | Streamable-HTTP client-factory hooks influence the real transport client and are covered. |
+| `mcp/test_streamable_http_session_id` | `covered` | `crates/agents-core/src/mcp/server.rs` | Streamable-HTTP session-id allocation, pinning, and reset semantics are covered. |
+| `mcp/test_tool_filtering` | `covered` | `crates/agents-core/src/mcp/util.rs` | Static/callable tool filters, metadata resolution, and approval mapping are covered. |
 
 ### Realtime
 
@@ -186,14 +186,14 @@ Tracked upstream families: `293`
 | `realtime/test_model_events` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
 | `realtime/test_openai_realtime` | `covered` | `crates/agents-realtime/src/openai_realtime.rs`, `crates/openai-agents/tests/realtime_semantics.rs` | Websocket and SIP model behavior, event-type normalization, and session updates are covered. |
 | `realtime/test_openai_realtime_conversions` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
-| `realtime/test_openai_realtime_sip_model` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
+| `realtime/test_openai_realtime_sip_model` | `covered` | `crates/agents-realtime/src/openai_realtime.rs` | SIP realtime connect/send/update/disconnect requirements and call-id validation are covered. |
 | `realtime/test_playback_tracker` | `covered` | `crates/agents-realtime/src/_default_tracker.rs` | Playback sample accumulation, derived duration, and reset behavior are covered. |
 | `realtime/test_playback_tracker_manual_unit` | `covered` | `crates/agents-realtime/src/_default_tracker.rs` | Manual playback tracker state transitions are covered alongside the core tracker unit tests. |
 | `realtime/test_realtime_handoffs` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
 | `realtime/test_realtime_model_settings` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
 | `realtime/test_runner` | `covered` | `crates/agents-realtime/src/runner.rs`, `crates/openai-agents/tests/realtime_semantics.rs` | Session creation, run-config model settings, and live session commands are covered. |
 | `realtime/test_session` | `covered` | `crates/agents-realtime/src/session.rs`, `crates/openai-agents/tests/realtime_semantics.rs` | Live event streaming, lifecycle transitions, model-setting state, playback state, interrupts, and shutdown are covered. |
-| `realtime/test_session_payload_and_formats` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
+| `realtime/test_session_payload_and_formats` | `covered` | `crates/agents-realtime/src/openai_realtime.rs` | GA-style session payload normalization, transcription rejection, and audio-format extraction are covered. |
 | `realtime/test_tracing` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
 | `realtime/test_twilio_sip_server` | `omitted-with-rationale` | `n/a` | Realtime parity for this upstream family is not fully implemented in Rust yet; keep it omitted until the runtime path and tests exist. |
 
@@ -201,9 +201,9 @@ Tracked upstream families: `293`
 
 | Family | Status | Rust coverage | Notes |
 | --- | --- | --- | --- |
-| `voice/test_input` | `omitted-with-rationale` | `n/a` | Voice parity for this upstream family is still missing from the Rust runtime, so it remains omitted until executable coverage lands. |
-| `voice/test_openai_stt` | `omitted-with-rationale` | `n/a` | Voice parity for this upstream family is still missing from the Rust runtime, so it remains omitted until executable coverage lands. |
-| `voice/test_openai_tts` | `omitted-with-rationale` | `n/a` | Voice parity for this upstream family is still missing from the Rust runtime, so it remains omitted until executable coverage lands. |
+| `voice/test_input` | `covered` | `crates/agents-voice/src/input.rs` | Buffered and streamed voice input normalization into runtime transport formats is covered. |
+| `voice/test_openai_stt` | `covered` | `crates/agents-voice/src/models/openai_stt.rs` | OpenAI STT handshake, completion, timeout, and error semantics are covered. |
+| `voice/test_openai_tts` | `covered` | `crates/agents-voice/src/models/openai_tts.rs` | OpenAI TTS default/custom voice settings and runtime synthesis behavior are covered. |
 | `voice/test_pipeline` | `covered` | `crates/agents-voice/src/pipeline.rs`, `crates/agents-voice/src/result.rs`, `crates/openai-agents/tests/voice_semantics.rs` | Live streamed audio results, transcript events, session lifecycle events, and streamed audio input are covered. |
 | `voice/test_workflow` | `covered` | `crates/agents-voice/src/workflow.rs`, `crates/openai-agents/tests/voice_semantics.rs` | Single-agent workflow state, streamed core-runner output, and transcript extraction are covered. |
 

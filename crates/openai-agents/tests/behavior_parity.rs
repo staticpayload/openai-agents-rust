@@ -511,3 +511,94 @@ fn omitted_behavior_parity_rows_have_specific_rationales() {
         placeholder_rows.join(", ")
     );
 }
+
+#[test]
+fn final_release_gate_rows_capture_latest_coverage_and_accepted_omissions() {
+    let root = workspace_root();
+    let parity_doc =
+        fs::read_to_string(root.join("docs/BEHAVIOR_PARITY.md")).expect("behavior parity doc");
+    let families = parse_family_rows(&parity_doc);
+
+    for (family, coverage_path) in [
+        (
+            "test_call_model_input_filter",
+            "crates/openai-agents/tests/runner_semantics.rs",
+        ),
+        (
+            "test_call_model_input_filter_unit",
+            "crates/agents-core/src/run.rs",
+        ),
+        ("voice/test_input", "crates/agents-voice/src/input.rs"),
+        (
+            "voice/test_openai_stt",
+            "crates/agents-voice/src/models/openai_stt.rs",
+        ),
+        (
+            "voice/test_openai_tts",
+            "crates/agents-voice/src/models/openai_tts.rs",
+        ),
+        (
+            "mcp/test_tool_filtering",
+            "crates/agents-core/src/mcp/util.rs",
+        ),
+        (
+            "realtime/test_session_payload_and_formats",
+            "crates/agents-realtime/src/openai_realtime.rs",
+        ),
+        (
+            "test_openai_chatcompletions_stream",
+            "crates/agents-openai/src/models/chatcmpl_stream_handler.rs",
+        ),
+    ] {
+        let row = families
+            .get(family)
+            .unwrap_or_else(|| panic!("missing behavior parity row for {family}"));
+        assert_eq!(row.status, "covered", "{family} should be covered");
+        assert!(
+            row.coverage.iter().any(|path| path == coverage_path),
+            "{family} should point at executable coverage path {coverage_path}, got {:?}",
+            row.coverage
+        );
+    }
+
+    let session_row = families
+        .get("test_session")
+        .expect("missing behavior parity row for test_session");
+    assert_eq!(
+        session_row.status, "omitted-with-rationale",
+        "test_session should remain an explicit accepted omission"
+    );
+    for required_phrase in [
+        "session_input_callback",
+        "duplicate empty JSON object",
+        "in-band marker",
+        "public API change",
+    ] {
+        assert!(
+            session_row.notes.contains(required_phrase),
+            "test_session omission rationale should mention `{required_phrase}`, got: {}",
+            session_row.notes
+        );
+    }
+
+    let tracker_row = families
+        .get("test_server_conversation_tracker")
+        .expect("missing behavior parity row for test_server_conversation_tracker");
+    assert_eq!(
+        tracker_row.status, "omitted-with-rationale",
+        "test_server_conversation_tracker should remain an explicit accepted omission"
+    );
+    for required_phrase in [
+        "call_model_input_filter",
+        "drops/reorders siblings",
+        "multiple fresh replacement items",
+        "ModelInputData",
+        "provenance-aware API channel",
+    ] {
+        assert!(
+            tracker_row.notes.contains(required_phrase),
+            "test_server_conversation_tracker omission rationale should mention `{required_phrase}`, got: {}",
+            tracker_row.notes
+        );
+    }
+}

@@ -264,5 +264,133 @@
       "crates/openai-agents/tests/extensions_semantics.rs"
     ],
     "notes": "Twilio media-stream normalization, interruption timing, and outbound mark generation are covered."
+  },
+  "test_call_model_input_filter": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs",
+      "crates/openai-agents/tests/runner_semantics.rs"
+    ],
+    "notes": "Streamed and non-streamed `call_model_input_filter` rewrites plus invalid-return failures are covered."
+  },
+  "test_call_model_input_filter_unit": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs"
+    ],
+    "notes": "Core unit coverage exercises sync/async filter rewrites and invalid-return rejection."
+  },
+  "test_session": {
+    "status": "omitted-with-rationale",
+    "coverage": [
+      "n/a"
+    ],
+    "notes": "Rust covers session shaping, limits, and duplicate JSON provenance except for the duplicate empty JSON object `session_input_callback` provenance edge: full Python-style object-identity parity is not safely achievable under the current Rust by-value callback API without an in-band marker or public API change."
+  },
+  "test_session_limit": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/memory/util.rs",
+      "crates/agents-core/src/memory/session.rs"
+    ],
+    "notes": "Session limit helpers and MemorySession default-limit behavior are covered."
+  },
+  "test_session_exceptions": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/run.rs"
+    ],
+    "notes": "Session-owned persistence rejects conflicting explicit conversation-tracking settings."
+  },
+  "test_openai_chatcompletions_stream": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-openai/src/models/chatcmpl_stream_handler.rs"
+    ],
+    "notes": "Chat Completions streaming delta ordering and final assembly are covered."
+  },
+  "test_server_conversation_tracker": {
+    "status": "omitted-with-rationale",
+    "coverage": [
+      "n/a"
+    ],
+    "notes": "Rust covers sent-state rewind and filtered delta replay except when `call_model_input_filter` drops/reorders siblings and returns multiple fresh replacement items: the current callback API returns only `ModelInputData`, so exact source mapping is not safely recoverable without a provenance-aware API channel."
+  },
+  "mcp/test_tool_filtering": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/util.rs"
+    ],
+    "notes": "Static/callable tool filters, metadata resolution, and approval mapping are covered."
+  },
+  "mcp/test_server_errors": {
+    "status": "covered",
+    "coverage": [
+      "crates/openai-agents/tests/mcp_semantics.rs"
+    ],
+    "notes": "Unknown, duplicate, and failing MCP tool paths fail clearly through the shared runner."
+  },
+  "mcp/test_mcp_approval": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/util.rs"
+    ],
+    "notes": "`requires_approval` mapping to approval-gated MCP runtime tools is covered."
+  },
+  "mcp/test_mcp_auth_params": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/server.rs"
+    ],
+    "notes": "SSE and streamable-HTTP auth/configuration handling are covered."
+  },
+  "mcp/test_streamable_http_client_factory": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/server.rs"
+    ],
+    "notes": "Streamable-HTTP client-factory hooks influence the real transport client and are covered."
+  },
+  "mcp/test_streamable_http_session_id": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-core/src/mcp/server.rs"
+    ],
+    "notes": "Streamable-HTTP session-id allocation, pinning, and reset semantics are covered."
+  },
+  "realtime/test_session_payload_and_formats": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/openai_realtime.rs"
+    ],
+    "notes": "GA-style session payload normalization, transcription rejection, and audio-format extraction are covered."
+  },
+  "realtime/test_openai_realtime_sip_model": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-realtime/src/openai_realtime.rs"
+    ],
+    "notes": "SIP realtime connect/send/update/disconnect requirements and call-id validation are covered."
+  },
+  "voice/test_input": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-voice/src/input.rs"
+    ],
+    "notes": "Buffered and streamed voice input normalization into runtime transport formats is covered."
+  },
+  "voice/test_openai_stt": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-voice/src/models/openai_stt.rs"
+    ],
+    "notes": "OpenAI STT handshake, completion, timeout, and error semantics are covered."
+  },
+  "voice/test_openai_tts": {
+    "status": "covered",
+    "coverage": [
+      "crates/agents-voice/src/models/openai_tts.rs"
+    ],
+    "notes": "OpenAI TTS default/custom voice settings and runtime synthesis behavior are covered."
   }
 }

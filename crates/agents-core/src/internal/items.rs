@@ -1,5 +1,6 @@
 use crate::items::{InputItem, RunItem};
 use crate::run_config::ReasoningItemIdPolicy;
+use serde_json::Value;
 
 pub(crate) fn copy_input_items(items: &[InputItem]) -> Vec<InputItem> {
     items.to_vec()
@@ -52,8 +53,49 @@ fn trailing_generated_overlap(base_items: &[InputItem], generated_inputs: &[Inpu
     let max_overlap = base_items.len().min(generated_inputs.len());
     (1..=max_overlap)
         .rev()
-        .find(|overlap| base_items[base_items.len() - overlap..] == generated_inputs[..*overlap])
+        .find(|overlap| {
+            let compared_items = base_items[base_items.len() - overlap..]
+                .iter()
+                .zip(generated_inputs[..*overlap].iter())
+                .collect::<Vec<_>>();
+
+            compared_items
+                .iter()
+                .all(|(base_item, generated_item)| base_item == generated_item)
+                && compared_items.iter().any(|(base_item, generated_item)| {
+                    stable_replay_dedupe_key(base_item)
+                        .zip(stable_replay_dedupe_key(generated_item))
+                        .is_some_and(|(base_key, generated_key)| base_key == generated_key)
+                })
+        })
         .unwrap_or(0)
+}
+
+fn stable_replay_dedupe_key(item: &InputItem) -> Option<String> {
+    let value = match item {
+        InputItem::Text { .. } => return None,
+        InputItem::Json { value } => value,
+    };
+
+    let item_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("role").and_then(Value::as_str))?;
+
+    if value.get("role").is_some() || item_type == "message" {
+        return None;
+    }
+
+    if let Some(item_id) = value.get("id").and_then(Value::as_str) {
+        if item_id != "__fake_id__" {
+            return Some(format!("id:{item_type}:{item_id}"));
+        }
+    }
+
+    value
+        .get("call_id")
+        .and_then(Value::as_str)
+        .map(|call_id| format!("call:{item_type}:{call_id}"))
 }
 
 #[cfg(test)]
@@ -208,5 +250,23 @@ mod tests {
             1
         );
         assert_eq!(replay.len(), 4);
+    }
+
+    #[test]
+    fn composes_replay_preserving_repeated_generated_message_items() {
+        let replay = compose_replay_input_items(
+            &[InputItem::from("done")],
+            &[RunItem::MessageOutput {
+                content: OutputItem::Text {
+                    text: "done".to_owned(),
+                },
+            }],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(
+            replay,
+            vec![InputItem::from("done"), InputItem::from("done")]
+        );
     }
 }

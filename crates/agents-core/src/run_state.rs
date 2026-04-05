@@ -377,6 +377,29 @@ mod tests {
     }
 
     #[test]
+    fn resume_input_preserves_repeated_generated_items() {
+        let context = RunContextWrapper::new(RunContext::default());
+        let mut state = RunState::new(
+            &context,
+            vec![InputItem::from("done")],
+            Agent::builder("router").build(),
+            3,
+        )
+        .expect("run state should build");
+
+        state.push_generated_item(RunItem::MessageOutput {
+            content: crate::items::OutputItem::Text {
+                text: "done".to_owned(),
+            },
+        });
+
+        assert_eq!(
+            state.resume_input(),
+            vec![InputItem::from("done"), InputItem::from("done")]
+        );
+    }
+
+    #[test]
     fn records_guardrail_results() {
         let context = RunContextWrapper::new(RunContext::default());
         let mut state = RunState::new(&context, vec![], Agent::builder("router").build(), 3)

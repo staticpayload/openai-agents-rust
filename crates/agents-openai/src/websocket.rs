@@ -164,6 +164,7 @@ mod tests {
                 },
             ],
             tools: Vec::new(),
+            output_schema: None,
         });
 
         assert_eq!(payload["model"], "gpt-5");
@@ -227,6 +228,7 @@ mod tests {
             settings: Default::default(),
             input: vec![InputItem::from("hello")],
             tools: Vec::new(),
+            output_schema: None,
         });
 
         assert_eq!(payload["conversation"], "conv_123");

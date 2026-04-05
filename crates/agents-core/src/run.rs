@@ -1215,6 +1215,7 @@ impl Runner {
                 settings: settings.clone(),
                 input: model_data.input,
                 tools,
+                output_schema: internal_turn_preparation::get_output_schema(agent),
             };
             let response = model_provider
                 .resolve_with_settings(requested_model.as_deref(), &settings)
@@ -1641,7 +1642,7 @@ mod tests {
     use futures::FutureExt;
     use futures::StreamExt;
     use schemars::JsonSchema;
-    use serde::Deserialize;
+    use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
     use crate::errors::AgentsError;
@@ -1741,6 +1742,7 @@ mod tests {
     struct RequestCaptureModel {
         previous_response_id: Arc<Mutex<Option<String>>>,
         conversation_id: Arc<Mutex<Option<String>>>,
+        output_schema: Arc<Mutex<Option<crate::OutputSchemaDefinition>>>,
     }
 
     #[async_trait]
@@ -1755,6 +1757,10 @@ mod tests {
                 .conversation_id
                 .lock()
                 .expect("request capture conversation id lock") = request.conversation_id.clone();
+            *self
+                .output_schema
+                .lock()
+                .expect("request capture output schema lock") = request.output_schema.clone();
 
             Ok(ModelResponse {
                 model: request.model,
@@ -2194,6 +2200,11 @@ mod tests {
     #[derive(Debug, Deserialize, JsonSchema)]
     struct SearchArgs {
         query: String,
+    }
+
+    #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+    struct StructuredAnswer {
+        answer: String,
     }
 
     #[tokio::test]
@@ -3106,6 +3117,35 @@ mod tests {
                 .durable_state()
                 .and_then(|state| state.previous_response_id.as_deref()),
             Some("resp-auto-2")
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_threads_agent_output_schema_into_model_request() {
+        let model = Arc::new(RequestCaptureModel::default());
+        let provider = Arc::new(RequestCaptureProvider {
+            model: model.clone(),
+        });
+        let output_schema =
+            crate::OutputSchemaDefinition::from_output_type::<StructuredAnswer>(true)
+                .expect("structured output schema should build");
+        let agent = Agent::builder("assistant")
+            .output_schema(output_schema.clone())
+            .build();
+
+        Runner::new()
+            .with_model_provider(provider)
+            .run(&agent, "hello")
+            .await
+            .expect("run should succeed");
+
+        assert_eq!(
+            model
+                .output_schema
+                .lock()
+                .expect("output schema capture lock")
+                .clone(),
+            Some(output_schema)
         );
     }
 

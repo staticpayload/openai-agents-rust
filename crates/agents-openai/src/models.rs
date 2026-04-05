@@ -154,6 +154,9 @@ impl OpenAIResponsesModel {
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
         }
+        if let Some(text_config) = openai_responses_text_config(request) {
+            payload.insert("text".to_owned(), text_config);
+        }
         apply_responses_model_settings(&mut payload, &request.settings);
         Value::Object(payload)
     }
@@ -209,6 +212,9 @@ impl OpenAIChatCompletionsModel {
         let has_tools = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
+        }
+        if let Some(response_format) = openai_chat_response_format(request) {
+            payload.insert("response_format".to_owned(), response_format);
         }
         apply_chat_model_settings(&mut payload, &request.settings, has_tools);
         Value::Object(payload)
@@ -683,6 +689,32 @@ fn openai_tool_payload(tool: &ToolDefinition) -> Value {
     })
 }
 
+fn openai_responses_text_config(request: &ModelRequest) -> Option<Value> {
+    request.output_schema.as_ref().map(|output_schema| {
+        json!({
+            "format": {
+                "type": "json_schema",
+                "name": output_schema.name,
+                "schema": output_schema.schema,
+                "strict": output_schema.strict,
+            }
+        })
+    })
+}
+
+fn openai_chat_response_format(request: &ModelRequest) -> Option<Value> {
+    request.output_schema.as_ref().map(|output_schema| {
+        json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": output_schema.name,
+                "schema": output_schema.schema,
+                "strict": output_schema.strict,
+            }
+        })
+    })
+}
+
 fn parse_responses_response(
     model: &str,
     payload: &Value,
@@ -902,6 +934,7 @@ fn tool_output_to_chat_content(value: Option<&Value>) -> String {
 mod tests {
     use std::sync::{Arc, Mutex};
 
+    use agents_core::OutputSchemaDefinition;
     use futures::{SinkExt, StreamExt};
     use serde_json::json;
     use tokio::net::TcpListener;
@@ -948,6 +981,7 @@ mod tests {
                     "required": ["query"]
                 })),
             ],
+            output_schema: None,
             trace_id: None,
         });
 
@@ -996,6 +1030,7 @@ mod tests {
                     "type": "object"
                 })),
             ],
+            output_schema: None,
             trace_id: None,
         });
 
@@ -1010,6 +1045,87 @@ mod tests {
         assert_eq!(payload["parallel_tool_calls"], true);
         assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn responses_payload_includes_structured_output_schema_format() {
+        let model = OpenAIResponsesModel::new(
+            "gpt-5",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let output_schema = OutputSchemaDefinition::new(
+            "final_output",
+            json!({
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"}
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+            }),
+            true,
+        );
+        let payload = model.build_payload(&ModelRequest {
+            model: Some("gpt-5".to_owned()),
+            instructions: Some("Be precise".to_owned()),
+            previous_response_id: None,
+            conversation_id: None,
+            settings: Default::default(),
+            input: vec![InputItem::from("hello")],
+            tools: Vec::new(),
+            output_schema: Some(output_schema.clone()),
+            trace_id: None,
+        });
+
+        assert_eq!(payload["text"]["format"]["type"], "json_schema");
+        assert_eq!(payload["text"]["format"]["name"], output_schema.name);
+        assert_eq!(payload["text"]["format"]["strict"], output_schema.strict);
+        assert_eq!(payload["text"]["format"]["schema"], output_schema.schema);
+    }
+
+    #[test]
+    fn chat_payload_includes_structured_output_response_format() {
+        let model = OpenAIChatCompletionsModel::new(
+            "gpt-4.1",
+            OpenAIClientOptions::new(Some("sk-test".to_owned())),
+        );
+        let output_schema = OutputSchemaDefinition::new(
+            "final_output",
+            json!({
+                "type": "object",
+                "properties": {
+                    "answer": {"type": "string"}
+                },
+                "required": ["answer"],
+                "additionalProperties": false
+            }),
+            true,
+        );
+        let payload = model.build_payload(&ModelRequest {
+            model: Some("gpt-4.1".to_owned()),
+            instructions: Some("Be brief".to_owned()),
+            previous_response_id: None,
+            conversation_id: None,
+            settings: Default::default(),
+            input: vec![InputItem::from("hello")],
+            tools: Vec::new(),
+            output_schema: Some(output_schema.clone()),
+            trace_id: None,
+        });
+
+        assert_eq!(payload["response_format"]["type"], "json_schema");
+        assert_eq!(
+            payload["response_format"]["json_schema"]["name"],
+            output_schema.name
+        );
+        assert_eq!(
+            payload["response_format"]["json_schema"]["strict"],
+            output_schema.strict
+        );
+        assert_eq!(
+            payload["response_format"]["json_schema"]["schema"],
+            output_schema.schema
+        );
     }
 
     #[test]
@@ -1035,6 +1151,7 @@ mod tests {
                 }),
             }],
             tools: Vec::new(),
+            output_schema: None,
             trace_id: None,
         });
 
@@ -1056,6 +1173,7 @@ mod tests {
             settings: Default::default(),
             input: vec![InputItem::from("hello")],
             tools: Vec::new(),
+            output_schema: None,
             trace_id: None,
         });
 
@@ -1077,6 +1195,7 @@ mod tests {
             settings: Default::default(),
             input: vec![InputItem::from("hello")],
             tools: Vec::new(),
+            output_schema: None,
             trace_id: None,
         });
 
@@ -1268,6 +1387,7 @@ mod tests {
                 },
                 input: vec![InputItem::from("hello")],
                 tools: Vec::new(),
+                output_schema: None,
                 trace_id: None,
             })
             .await

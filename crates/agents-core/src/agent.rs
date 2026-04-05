@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::agent_output::OutputSchemaDefinition;
 use crate::agent_tool_input::{
     AgentAsToolInput, ResolvedToolInput, StructuredInputSchemaInfo, resolve_agent_tool_input,
 };
@@ -280,6 +281,7 @@ pub struct Agent {
     pub name: String,
     pub handoff_description: Option<String>,
     pub instructions: Option<String>,
+    pub output_schema: Option<OutputSchemaDefinition>,
     pub model_settings: Option<ModelSettings>,
     pub tools: Vec<StaticTool>,
     #[serde(skip, default)]
@@ -306,6 +308,7 @@ impl fmt::Debug for Agent {
             .field("name", &self.name)
             .field("handoff_description", &self.handoff_description)
             .field("instructions", &self.instructions)
+            .field("output_schema", &self.output_schema)
             .field("model_settings", &self.model_settings)
             .field("tools", &self.tools)
             .field("function_tools", &self.function_tools.len())
@@ -684,6 +687,11 @@ impl AgentBuilder {
 
     pub fn model_settings(mut self, model_settings: ModelSettings) -> Self {
         self.agent.model_settings = Some(model_settings);
+        self
+    }
+
+    pub fn output_schema(mut self, output_schema: OutputSchemaDefinition) -> Self {
+        self.agent.output_schema = Some(output_schema);
         self
     }
 

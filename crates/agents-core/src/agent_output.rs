@@ -1,12 +1,48 @@
 use std::marker::PhantomData;
 
 use schemars::{JsonSchema, schema_for};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::exceptions::{ModelBehaviorError, UserError};
 use crate::strict_schema::ensure_strict_json_schema;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct OutputSchemaDefinition {
+    pub name: String,
+    pub schema: Value,
+    pub strict: bool,
+}
+
+impl OutputSchemaDefinition {
+    pub fn new(name: impl Into<String>, schema: Value, strict: bool) -> Self {
+        Self {
+            name: name.into(),
+            schema,
+            strict,
+        }
+    }
+
+    pub fn from_agent_output_schema(
+        name: impl Into<String>,
+        output_schema: &dyn AgentOutputSchemaBase,
+    ) -> std::result::Result<Self, UserError> {
+        Ok(Self {
+            name: name.into(),
+            schema: output_schema.json_schema()?,
+            strict: output_schema.is_strict_json_schema(),
+        })
+    }
+
+    pub fn from_output_type<T>(strict_json_schema: bool) -> std::result::Result<Self, UserError>
+    where
+        T: JsonSchema + DeserializeOwned + Serialize + Send + Sync + 'static,
+    {
+        let output_schema = AgentOutputSchema::<T>::new(strict_json_schema);
+        Self::from_agent_output_schema("final_output", &output_schema)
+    }
+}
 
 pub trait AgentOutputSchemaBase: Send + Sync {
     fn is_plain_text(&self) -> bool;

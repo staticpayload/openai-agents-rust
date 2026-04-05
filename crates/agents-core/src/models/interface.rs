@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::OutputSchemaDefinition;
 use crate::errors::Result;
 use crate::items::{InputItem, OutputItem};
 use crate::model_settings::ModelSettings;
@@ -41,6 +42,7 @@ pub struct ModelRequest {
     pub settings: ModelSettings,
     pub input: Vec<InputItem>,
     pub tools: Vec<ToolDefinition>,
+    pub output_schema: Option<OutputSchemaDefinition>,
 }
 
 impl ModelRequest {

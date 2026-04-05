@@ -1,4 +1,5 @@
 use crate::agent::Agent;
+use crate::agent_output::OutputSchemaDefinition;
 use crate::errors::Result;
 use crate::handoff::Handoff;
 use crate::run_config::{CallModelData, ModelInputData, RunConfig};
@@ -37,8 +38,8 @@ pub(crate) async fn get_all_tools(
     agent.runtime_tool_definitions(context).await
 }
 
-pub(crate) fn get_output_schema(_agent: &Agent) -> Option<serde_json::Value> {
-    None
+pub(crate) fn get_output_schema(agent: &Agent) -> Option<OutputSchemaDefinition> {
+    agent.output_schema.clone()
 }
 
 pub(crate) fn get_model(agent: &Agent) -> Option<String> {

@@ -75,7 +75,7 @@ pub use agent::{
     StopAtTools, StructuredToolInputBuilder, ToolUseBehavior, ToolsToFinalOutputFunction,
     ToolsToFinalOutputResult,
 };
-pub use agent_output::{AgentOutputSchema, AgentOutputSchemaBase};
+pub use agent_output::{AgentOutputSchema, AgentOutputSchemaBase, OutputSchemaDefinition};
 pub use agent_tool_input::{
     AgentAsToolInput, ResolvedToolInput, StructuredInputSchemaInfo, default_tool_input_builder,
     resolve_agent_tool_input,

@@ -225,14 +225,16 @@ fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
 }
 
 fn prefers_new_frequency_match(item: &InputItem) -> bool {
-    matches!(
-        item,
+    match item {
         InputItem::Json {
-            value: serde_json::Value::Null
-                | serde_json::Value::Bool(_)
-                | serde_json::Value::Number(_),
-        }
-    )
+            value:
+                serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_),
+        } => true,
+        InputItem::Json {
+            value: serde_json::Value::Object(map),
+        } => map.is_empty(),
+        InputItem::Text { .. } | InputItem::Json { .. } => false,
+    }
 }
 
 #[cfg(test)]
@@ -383,6 +385,11 @@ mod tests {
             "content": "same"
         }))
         .await;
+    }
+
+    #[tokio::test]
+    async fn session_input_callback_preserves_duplicate_empty_json_object_provenance() {
+        assert_session_input_callback_preserves_duplicate_json_value_provenance(json!({})).await;
     }
 
     #[tokio::test]

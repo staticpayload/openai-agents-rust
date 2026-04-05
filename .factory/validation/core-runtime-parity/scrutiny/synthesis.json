@@ -36,6 +36,13 @@
   ],
   "appliedUpdates": [],
   "suggestedGuidanceUpdates": [],
-  "rejectedObservations": [],
+  "rejectedObservations": [
+    {
+      "type": "override",
+      "featureId": "scrutiny-validator-core-runtime-parity",
+      "summary": "Accepted narrow omission for ambiguous multi-item fresh-replacement provenance under call_model_input_filter.",
+      "justification": "Full Python-style source attribution for server-managed conversation deltas is not safely achievable under the current Rust call_model_input_filter API when the filter drops or reorders siblings and returns multiple fresh replacement items, because ModelInputData carries no provenance-aware channel. The mission preserves the clean public API and will document this narrow omission explicitly in the final parity ledger refresh."
+    }
+  ],
   "previousRound": ".factory/validation/core-runtime-parity/scrutiny/synthesis.round3.json"
 }

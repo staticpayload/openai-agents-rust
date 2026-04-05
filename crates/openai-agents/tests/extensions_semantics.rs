@@ -1,3 +1,4 @@
+use openai_agents::VERSION;
 use openai_agents::extensions::{
     CloudflareRealtimeSocket, CloudflareRealtimeTransportLayer, TwilioOutboundMessage,
     TwilioRealtimeTransportAction, TwilioRealtimeTransportLayer,
@@ -20,12 +21,20 @@ impl CloudflareRealtimeSocket for FakeCloudflareSocket {
 fn cloudflare_transport_builds_upgrade_request_and_accepts_socket() {
     let transport =
         CloudflareRealtimeTransportLayer::new("wss://api.openai.com/v1/realtime?model=foo");
+    let expected_sdk_header = format!("openai-agents-sdk.{VERSION}");
     let socket = transport
         .connect_with("ek_test", |request| {
             assert_eq!(request.url, "https://api.openai.com/v1/realtime?model=foo");
             assert_eq!(
                 request.headers.get("Authorization").map(String::as_str),
                 Some("Bearer ek_test")
+            );
+            assert_eq!(
+                request
+                    .headers
+                    .get("X-OpenAI-Agents-SDK")
+                    .map(String::as_str),
+                Some(expected_sdk_header.as_str())
             );
             Ok(FakeCloudflareSocket::default())
         })

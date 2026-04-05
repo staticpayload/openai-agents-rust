@@ -64,6 +64,10 @@ impl CloudflareRealtimeTransportLayer {
                 "User-Agent".to_owned(),
                 format!("openai-agents-rust/{VERSION}"),
             ),
+            (
+                "X-OpenAI-Agents-SDK".to_owned(),
+                format!("openai-agents-sdk.{VERSION}"),
+            ),
         ]);
         headers.extend(self.extra_headers.clone());
 
@@ -317,6 +321,7 @@ mod tests {
         let request = transport
             .build_upgrade_request("ek_test")
             .expect("upgrade request should build");
+        let expected_sdk_header = format!("openai-agents-sdk.{VERSION}");
 
         assert_eq!(request.url, "https://api.openai.com/v1/realtime?model=foo");
         assert_eq!(request.method, "GET");
@@ -332,6 +337,13 @@ mod tests {
             Some("realtime")
         );
         assert!(request.headers.contains_key("User-Agent"));
+        assert_eq!(
+            request
+                .headers
+                .get("X-OpenAI-Agents-SDK")
+                .map(String::as_str),
+            Some(expected_sdk_header.as_str())
+        );
     }
 
     #[test]

@@ -1,0 +1,103 @@
+{
+  "milestone": "core-runtime-parity",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test -q --workspace",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 6,
+    "passed": 1,
+    "failed": 5,
+    "failedFeatures": [
+      "implement-core-input-filter-replay-and-max-turn-parity",
+      "implement-core-structured-output-and-provider-parity",
+      "implement-openai-model-streaming-and-provider-transport-parity",
+      "implement-openai-session-tracker-and-compaction-parity",
+      "implement-mcp-transport-config-and-negative-path-parity"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "implement-core-input-filter-replay-and-max-turn-parity",
+      "severity": "blocking",
+      "description": "Multi-turn `call_model_input_filter` rewrites are only snapshotted on the first turn, so later filtered continuations are lost from normalized replay/durable state and parity with upstream filtered-history behavior is incomplete."
+    },
+    {
+      "featureId": "implement-core-input-filter-replay-and-max-turn-parity",
+      "severity": "blocking",
+      "description": "The feature does not add executable structured-output `max_turns` coverage required by VAL-CORE-009; only plain/streamed tool-loop regressions were added."
+    },
+    {
+      "featureId": "implement-core-structured-output-and-provider-parity",
+      "severity": "blocking",
+      "description": "Structured-output schemas remain helper-only because the runner/provider request path still hardcodes no output schema, leaving `Agent`/`ModelRequest`/OpenAI payload builders without a structured-output channel."
+    },
+    {
+      "featureId": "implement-openai-model-streaming-and-provider-transport-parity",
+      "severity": "blocking",
+      "description": "`OpenAIProvider::with_api(...)` is still overridden by the shared `use_responses_by_default` setting, so explicit per-provider API selection cannot force Chat Completions vs Responses."
+    },
+    {
+      "featureId": "implement-openai-model-streaming-and-provider-transport-parity",
+      "severity": "blocking",
+      "description": "Explicit HTTP transport override is still impossible once the shared websocket default is enabled because the per-provider websocket flag is modeled as a plain bool instead of a tri-state override."
+    },
+    {
+      "featureId": "implement-openai-session-tracker-and-compaction-parity",
+      "severity": "blocking",
+      "description": "Server-conversation delta tracking still loses source attribution after `call_model_input_filter` rewrites an item, so already-sent input can remain in the unsent pool and be replayed on later turns."
+    },
+    {
+      "featureId": "implement-mcp-transport-config-and-negative-path-parity",
+      "severity": "blocking",
+      "description": "`MCPTransportClientFactory` is only an observational side-effect callback and cannot construct or modify the actual transport client/request pipeline, so client-factory parity is incomplete."
+    },
+    {
+      "featureId": "implement-mcp-transport-config-and-negative-path-parity",
+      "severity": "blocking",
+      "description": "Generated streamable-HTTP session ids are derived from the server name instead of true per-session transport state, which does not preserve upstream session-id semantics across fresh/replaced sessions."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated `.factory/library/architecture.md` with factual notes that server-managed conversation tracking must preserve source attribution across `call_model_input_filter` rewrites and that structured-output parity requires schema data to flow through the runtime request path.",
+      "sourceFeature": "implement-core-structured-output-and-provider-parity"
+    },
+    {
+      "target": "library",
+      "description": "Updated `.factory/library/parity.md` with MCP transport/session parity notes covering header-vs-option session semantics and the requirement that client-factory parity must affect the real transport client instead of being side-effect-only.",
+      "sourceFeature": "implement-mcp-transport-config-and-negative-path-parity"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "runtime-parity-worker skill",
+      "suggestion": "Clarify that runtime parity features can legitimately be evidence-only closures for already-correct behavior and can also be narrowly scoped no-behavior hygiene fixes when the feature description explicitly calls for that; document how to handle those cases without forcing fake failing-test-first or upstream-reference steps.",
+      "evidence": "The structured-output/provider review recorded skill-feedback asking for guidance on coverage-only parity closures, and the provider-warning cleanup review showed a correctly scoped warning-only task that did not benefit from the default upstream-read/failing-test-first procedure.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Treat the warning-cleanup skill observation as a separate guidance change from the broader runtime-parity-worker clarification.",
+      "reason": "duplicate"
+    }
+  ],
+  "previousRound": null
+}

@@ -1,0 +1,21 @@
+{
+  "featureId": "fix-openai-delta-tracking-under-filtered-rewrites",
+  "reviewedAt": "2026-04-05T15:14:42Z",
+  "commitId": "eec2e8cb795c1a71b0370816ef916da284b06d62",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The fix closes the exact single-item rewrite case from the prior review, but the replacement source-attribution logic is still not stable across filtered rewrites once the filter also drops or reorders other prepared items. In those mixed filtered turns, the tracker can still mark the wrong source item as sent and replay an already-delivered delta later, so the original scrutiny failure is not fully resolved.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/oai_conversation.rs",
+        "line": 148,
+        "severity": "blocking",
+        "description": "`register_filtered_input_sources()` matches each filtered item to a prepared source by post-filter fingerprint and otherwise falls back to `unwrap_or(0)`, i.e. the first remaining source. That only works when rewritten items stay in the same order and cardinality as the pre-filter input. If `call_model_input_filter` rewrites one item but also drops or reorders an earlier prepared item, the rewritten item is attributed to the wrong source. Because `Runner` then calls this helper before `mark_input_as_sent()` (`crates/agents-core/src/run.rs:581-582`), the tracker can leave the actually delivered source unsent and replay it on a later server-managed turn. The JS reference keeps explicit per-filtered-item source mappings (`reference/openai-agents-js/packages/agents-core/src/runner/conversation.ts:135-152,370-387`) specifically to avoid this class of misattribution."}
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/core-runtime-parity/scrutiny/reviews/implement-openai-session-tracker-and-compaction-parity.json",
+  "summary": "Fail. The rerun fixes the narrow one-item filtered rewrite regression, but the new remapping algorithm still guesses source identity when filter output shape changes, so sent-state can drift and already-sent deltas can still replay in mixed drop/rewrite turns."
+}

@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-runner-filtered-replay-and-structured-max-turn-coverage",
+  "reviewedAt": "2026-04-05T15:14:08Z",
+  "commitId": "13537a9dff5a7f79b0035078bd82ba69933b398b",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The rerun fixes the original multi-turn filtered-history snapshot bug, but it still does not close the feature safely. Replay composition now deduplicates by raw InputItem equality, which can erase legitimate repeated items from preserve-all replay and durable resume state, and the new max_turn regression still exercises structured tool outputs rather than the real structured-output schema path required by the upstream contract.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/items.rs",
+        "line": 46,
+        "severity": "blocking",
+        "description": "`compose_replay_input_items` infers overlap solely from `InputItem` value equality and now backs both `RunResult::to_input_list_mode(...)` and `RunState::resume_input()`. That means a legitimate repeated item can be dropped whenever the replay base happens to end with the same text/JSON as the first generated item. For example, if the caller input is `\"done\"` and the model also replies `\"done\"`, preserve-all replay collapses the second item because `trailing_generated_overlap(...)` treats it as already present. This fixes the prior multi-turn filter duplication issue by introducing a new history-loss bug in the shared replay path rather than preserving exact item sequences."
+      },
+      {
+        "file": "crates/agents-core/src/run.rs",
+        "line": 2911,
+        "severity": "blocking",
+        "description": "The added `runner_errors_when_max_turns_are_exhausted_with_structured_tool_outputs` regression still does not cover actual structured-output runs. It only checks a plain tool loop whose tool returns JSON, while the upstream contract specifically exercises agents configured with structured output (`output_type`/output schema) in both non-streamed and streamed max-turn exhaustion cases (`reference/openai-agents-python/tests/test_max_turns.py:92-140`). Since the structured-output request path is distinct in Rust (`runner_threads_agent_output_schema_into_model_request` lives separately at `crates/agents-core/src/run.rs:3244-3269`), this feature still leaves the required structured-output max_turn behavior uncovered."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/core-runtime-parity/scrutiny/reviews/implement-core-input-filter-replay-and-max-turn-parity.json",
+  "summary": "Fail: the rerun fixes the original multi-turn filter snapshot gap, but the new overlap-based replay helper can drop legitimate repeated items and the max_turn regression still does not exercise true structured-output runs."
+}

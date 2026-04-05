@@ -373,7 +373,10 @@ impl Runner {
         context: crate::run_context::RunContextWrapper,
         recorder: Option<StreamRecorder>,
     ) -> Result<RunResult> {
-        internal_agent_runner_helpers::validate_session_conversation_settings(&self.config)?;
+        internal_agent_runner_helpers::validate_session_conversation_settings(
+            &self.config,
+            session,
+        )?;
         let (prepared_input, original_input) =
             internal_agent_runner_helpers::prepare_input_with_session(
                 &self.config,
@@ -427,6 +430,19 @@ impl Runner {
                     .is_some_and(|config| config.disabled),
         );
         let trace = trace_manager.trace().clone();
+        let session_conversation_state = if let Some(session) = session {
+            if let Some(conversation_session) = session.conversation_session() {
+                Some(
+                    conversation_session
+                        .load_openai_conversation_state()
+                        .await?,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         let mut context = context_override
             .unwrap_or_else(|| internal_guardrails::new_run_context(trace.workflow_name.clone()));
@@ -434,7 +450,11 @@ impl Runner {
             context.context.workflow_name = Some(trace.workflow_name.clone());
         }
         if context.context.conversation_id.is_none() {
-            context.context.conversation_id = self.config.conversation_id.clone();
+            context.context.conversation_id = self.config.conversation_id.clone().or_else(|| {
+                session_conversation_state
+                    .as_ref()
+                    .and_then(|state| state.conversation_id.clone())
+            });
         }
         context.turn_input = original_input.clone();
 
@@ -491,6 +511,9 @@ impl Runner {
         let mut final_output_items = Vec::new();
         let mut conversation_tracker =
             internal_oai_conversation::OpenAIServerConversationTracker::new(&self.config);
+        if let Some(session_state) = &session_conversation_state {
+            conversation_tracker.apply_session_state(session_state);
+        }
 
         for _turn in 0..self.config.max_turns {
             if let Some(recorder) = &stream_recorder {
@@ -816,6 +839,13 @@ impl Runner {
         } else {
             0
         };
+        if let Some(session) = session {
+            if let Some(conversation_session) = session.conversation_session() {
+                conversation_session
+                    .save_openai_conversation_state(conversation_tracker.session_state())
+                    .await?;
+            }
+        }
 
         let mut run_state = RunState::new(
             &context,

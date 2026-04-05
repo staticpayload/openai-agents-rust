@@ -9,6 +9,7 @@ authors.workspace = true
 [dependencies]
 agents-core = { path = "../agents-core" }
 async-trait.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

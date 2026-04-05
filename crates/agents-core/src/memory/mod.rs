@@ -6,8 +6,9 @@ pub mod sqlite_session;
 pub mod util;
 
 pub use session::{
-    MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession, Session,
-    is_openai_responses_compaction_aware_session,
+    MemorySession, OpenAIConversationAwareSession, OpenAIConversationSessionState,
+    OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession, Session,
+    is_openai_conversation_aware_session, is_openai_responses_compaction_aware_session,
 };
 pub use session_settings::{SessionSettings, resolve_session_limit};
 pub use sqlite_session::SQLiteSession;

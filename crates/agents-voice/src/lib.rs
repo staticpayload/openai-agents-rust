@@ -65,13 +65,49 @@ mod tests {
             )
             .await
             .expect("pipeline should succeed");
+        let completed = result
+            .wait_for_completion()
+            .await
+            .expect("streamed audio result should complete");
 
-        assert_eq!(result.audio_chunks, 1);
-        assert!(!result.events.is_empty());
+        assert_eq!(completed.audio_chunks, 1);
+        assert!(!completed.events.is_empty());
         assert_eq!(
-            result.transcript,
+            completed.transcript,
             vec!["transcribed:audio/wav:3".to_owned()]
         );
+    }
+
+    #[tokio::test]
+    async fn streamed_audio_result_exposes_live_events() {
+        let workflow = SingleAgentVoiceWorkflow::new(
+            agents_core::Agent::builder("assistant")
+                .instructions("Be concise.")
+                .build(),
+        );
+        let pipeline = VoicePipeline::new(VoicePipelineConfig {
+            stream_audio: true,
+            ..VoicePipelineConfig::default()
+        });
+        let result = pipeline
+            .run(
+                &workflow,
+                AudioInput {
+                    mime_type: "audio/wav".to_owned(),
+                    bytes: vec![1, 2, 3],
+                },
+            )
+            .await
+            .expect("pipeline should succeed");
+
+        let events = result.stream_events().collect::<Vec<_>>().await;
+        let completed = result
+            .wait_for_completion()
+            .await
+            .expect("streamed audio result should complete");
+
+        assert!(!events.is_empty());
+        assert!(completed.audio_chunks >= 1);
     }
 
     #[tokio::test]

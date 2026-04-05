@@ -67,7 +67,14 @@ pub(crate) async fn save_result_to_session(
     Ok(count)
 }
 
-pub(crate) fn validate_session_conversation_settings(config: &RunConfig) -> Result<()> {
+pub(crate) fn validate_session_conversation_settings(
+    config: &RunConfig,
+    session: &(dyn Session + Sync),
+) -> Result<()> {
+    if session.conversation_session().is_some() {
+        return Ok(());
+    }
+
     if config.conversation_id.is_none()
         && config.previous_response_id.is_none()
         && !config.auto_previous_response_id

@@ -90,7 +90,10 @@ impl MCPUtil {
         agent: Agent,
     ) -> Result<Vec<MCPTool>> {
         let server_name = server.name().to_owned();
-        let tools = server.list_tools().await?;
+        server.connect().await?;
+        let tools = server.list_tools().await;
+        server.cleanup().await?;
+        let tools = tools?;
         Ok(tools
             .into_iter()
             .filter(|tool| {
@@ -142,6 +145,7 @@ impl MCPUtil {
                 let run_context = run_context.clone();
                 let server_name = server_name.clone();
                 Box::pin(async move {
+                    server.connect().await?;
                     let meta = meta_resolver.and_then(|resolver| {
                         resolver(MCPToolMetaContext {
                             run_context,
@@ -150,7 +154,9 @@ impl MCPUtil {
                             arguments: Some(args.clone()),
                         })
                     });
-                    server.call_tool(&tool_name, args, meta).await
+                    let result = server.call_tool(&tool_name, args, meta).await;
+                    server.cleanup().await?;
+                    result
                 })
             }),
         )

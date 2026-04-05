@@ -1,3 +1,4 @@
+use crate::memory::OpenAIConversationSessionState;
 use crate::model::ModelResponse;
 use crate::run_config::RunConfig;
 use crate::run_state::RunState;
@@ -26,11 +27,29 @@ impl OpenAIServerConversationTracker {
         self.conversation_id.as_deref()
     }
 
+    pub fn apply_session_state(&mut self, state: &OpenAIConversationSessionState) {
+        if self.conversation_id.is_none() {
+            self.conversation_id = state.conversation_id.clone();
+        }
+        if self.previous_response_id.is_none() {
+            self.previous_response_id = state.previous_response_id.clone();
+        }
+        self.auto_previous_response_id |= state.auto_previous_response_id;
+    }
+
     pub fn apply_response(&mut self, response: &ModelResponse) {
         if (self.auto_previous_response_id || self.previous_response_id.is_some())
             && response.response_id.is_some()
         {
             self.previous_response_id = response.response_id.clone();
+        }
+    }
+
+    pub fn session_state(&self) -> OpenAIConversationSessionState {
+        OpenAIConversationSessionState {
+            conversation_id: self.conversation_id.clone(),
+            previous_response_id: self.previous_response_id.clone(),
+            auto_previous_response_id: self.auto_previous_response_id,
         }
     }
 

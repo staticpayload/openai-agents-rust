@@ -53,6 +53,22 @@ pub struct RealtimeTranscriptDeltaEvent {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeInterruptedEvent {
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSessionUpdatedEvent {
+    pub info: RealtimeEventInfo,
+    pub model: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct RealtimeSessionClosedEvent {
+    pub info: RealtimeEventInfo,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RealtimeErrorEvent {
     pub message: String,
 }
@@ -68,5 +84,8 @@ pub enum RealtimeEvent {
     ToolApprovalRequired(RealtimeToolApprovalRequired),
     RawModelEvent(RealtimeRawModelEvent),
     TranscriptDelta(RealtimeTranscriptDeltaEvent),
+    Interrupted(RealtimeInterruptedEvent),
+    SessionUpdated(RealtimeSessionUpdatedEvent),
+    SessionClosed(RealtimeSessionClosedEvent),
     Error(RealtimeErrorEvent),
 }

@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use agents_core::{
-    InputItem, MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
-    Result, Session, SessionSettings,
+    InputItem, MemorySession, OpenAIConversationAwareSession, OpenAIConversationSessionState,
+    OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession, Result, Session,
+    SessionSettings,
 };
 use async_trait::async_trait;
 use tokio::sync::Mutex;
@@ -77,6 +78,32 @@ impl Session for OpenAIConversationsSession {
         self.inner.clear_session().await?;
         *self.conversation_id.lock().await = format!("conv_{}", Uuid::new_v4());
         *self.last_response_id.lock().await = None;
+        Ok(())
+    }
+
+    fn conversation_session(&self) -> Option<&dyn OpenAIConversationAwareSession> {
+        Some(self)
+    }
+}
+
+#[async_trait]
+impl OpenAIConversationAwareSession for OpenAIConversationsSession {
+    async fn load_openai_conversation_state(&self) -> Result<OpenAIConversationSessionState> {
+        Ok(OpenAIConversationSessionState {
+            conversation_id: Some(self.conversation_id().await),
+            previous_response_id: self.last_response_id().await,
+            auto_previous_response_id: true,
+        })
+    }
+
+    async fn save_openai_conversation_state(
+        &self,
+        state: OpenAIConversationSessionState,
+    ) -> Result<()> {
+        if let Some(conversation_id) = state.conversation_id {
+            *self.conversation_id.lock().await = conversation_id;
+        }
+        *self.last_response_id.lock().await = state.previous_response_id;
         Ok(())
     }
 }
@@ -249,8 +276,51 @@ impl Session for OpenAIResponsesCompactionSession {
         Ok(())
     }
 
+    fn conversation_session(&self) -> Option<&dyn OpenAIConversationAwareSession> {
+        Some(self)
+    }
+
     fn compaction_session(&self) -> Option<&dyn OpenAIResponsesCompactionAwareSession> {
         Some(self)
+    }
+}
+
+#[async_trait]
+impl OpenAIConversationAwareSession for OpenAIResponsesCompactionSession {
+    async fn load_openai_conversation_state(&self) -> Result<OpenAIConversationSessionState> {
+        let deferred_response_id = self.deferred_response_id.lock().await.clone();
+        let response_id = self.response_id.lock().await.clone();
+        let previous_response_id = match self.mode {
+            OpenAIResponsesCompactionMode::Input => None,
+            OpenAIResponsesCompactionMode::PreviousResponseId
+            | OpenAIResponsesCompactionMode::Auto => deferred_response_id.or(response_id),
+        };
+        let auto_previous_response_id = !matches!(self.mode, OpenAIResponsesCompactionMode::Input);
+
+        Ok(OpenAIConversationSessionState {
+            conversation_id: None,
+            previous_response_id,
+            auto_previous_response_id,
+        })
+    }
+
+    async fn save_openai_conversation_state(
+        &self,
+        state: OpenAIConversationSessionState,
+    ) -> Result<()> {
+        match self.mode {
+            OpenAIResponsesCompactionMode::Input => {
+                *self.response_id.lock().await = None;
+                *self.deferred_response_id.lock().await = None;
+            }
+            OpenAIResponsesCompactionMode::PreviousResponseId
+            | OpenAIResponsesCompactionMode::Auto => {
+                *self.response_id.lock().await = state.previous_response_id.clone();
+                *self.deferred_response_id.lock().await = None;
+                *self.last_unstored_response_id.lock().await = state.previous_response_id;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -346,5 +416,35 @@ mod tests {
             session.last_unstored_response_id().await.as_deref(),
             Some("resp-3")
         );
+    }
+
+    #[tokio::test]
+    async fn conversations_session_exposes_conversation_aware_state() {
+        let session = OpenAIConversationsSession::new("conv-1");
+        session.set_last_response_id("resp-1").await;
+
+        let state = session
+            .load_openai_conversation_state()
+            .await
+            .expect("conversation state should load");
+
+        assert_eq!(state.conversation_id.as_deref(), Some("conv-1"));
+        assert_eq!(state.previous_response_id.as_deref(), Some("resp-1"));
+        assert!(state.auto_previous_response_id);
+    }
+
+    #[tokio::test]
+    async fn compaction_input_mode_disables_previous_response_replay() {
+        let session = OpenAIResponsesCompactionSession::new("session")
+            .with_mode(OpenAIResponsesCompactionMode::Input);
+        session.set_response_id("resp-1").await;
+
+        let state = session
+            .load_openai_conversation_state()
+            .await
+            .expect("conversation state should load");
+
+        assert_eq!(state.previous_response_id, None);
+        assert!(!state.auto_previous_response_id);
     }
 }

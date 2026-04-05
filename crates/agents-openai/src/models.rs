@@ -147,6 +147,7 @@ impl OpenAIResponsesModel {
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
         }
+        apply_responses_model_settings(&mut payload, &request.settings);
         Value::Object(payload)
     }
 }
@@ -155,8 +156,13 @@ impl OpenAIResponsesModel {
 impl Model for OpenAIResponsesModel {
     async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
         let payload = self.build_payload(&request);
-        let response =
-            post_json(&self.options.api_url("/responses"), &self.options, payload).await?;
+        let response = post_json(
+            &self.options.api_url("/responses"),
+            &self.options,
+            payload,
+            &request.settings,
+        )
+        .await?;
 
         Ok(parse_responses_response(
             &self.model,
@@ -193,10 +199,11 @@ impl OpenAIChatCompletionsModel {
         messages.extend(request.input.iter().flat_map(openai_chat_messages));
         payload.insert("messages".to_owned(), Value::Array(messages));
         let tools = openai_tools_payload(&request.tools);
+        let has_tools = !tools.is_empty();
         if !tools.is_empty() {
             payload.insert("tools".to_owned(), Value::Array(tools));
-            payload.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
         }
+        apply_chat_model_settings(&mut payload, &request.settings, has_tools);
         Value::Object(payload)
     }
 }
@@ -209,6 +216,7 @@ impl Model for OpenAIChatCompletionsModel {
             &self.options.api_url("/chat/completions"),
             &self.options,
             payload,
+            &request.settings,
         )
         .await?;
 
@@ -248,10 +256,27 @@ async fn post_json(
     url: &str,
     options: &OpenAIClientOptions,
     payload: Value,
+    settings: &agents_core::ModelSettings,
 ) -> Result<OpenAIHttpResponse> {
-    let response = HTTP_CLIENT
-        .post(url)
-        .headers(options.auth_headers()?)
+    let mut headers = options.auth_headers()?;
+    for (name, value) in &settings.extra_headers {
+        headers.insert(
+            reqwest::header::HeaderName::from_bytes(name.as_bytes())
+                .map_err(|error| AgentsError::message(error.to_string()))?,
+            HeaderValue::from_str(&json_value_to_string(value))
+                .map_err(|error| AgentsError::message(error.to_string()))?,
+        );
+    }
+    let mut request = HTTP_CLIENT.post(url).headers(headers);
+    if !settings.extra_query.is_empty() {
+        let query = settings
+            .extra_query
+            .iter()
+            .map(|(key, value)| (key.clone(), json_value_to_string(value)))
+            .collect::<Vec<_>>();
+        request = request.query(&query);
+    }
+    let response = request
         .json(&payload)
         .send()
         .await
@@ -281,6 +306,116 @@ async fn post_json(
         payload,
         request_id,
     })
+}
+
+fn apply_responses_model_settings(
+    payload: &mut serde_json::Map<String, Value>,
+    settings: &agents_core::ModelSettings,
+) {
+    if let Some(value) = settings.temperature {
+        payload.insert("temperature".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.top_p {
+        payload.insert("top_p".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.max_output_tokens {
+        payload.insert("max_output_tokens".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.parallel_tool_calls {
+        payload.insert("parallel_tool_calls".to_owned(), json!(value));
+    }
+    if let Some(value) = &settings.tool_choice {
+        payload.insert("tool_choice".to_owned(), Value::String(value.clone()));
+    }
+    if let Some(value) = &settings.truncation {
+        payload.insert("truncation".to_owned(), Value::String(value.clone()));
+    }
+    if let Some(value) = settings.store {
+        payload.insert("store".to_owned(), json!(value));
+    }
+    if !settings.response_include.is_empty() {
+        payload.insert(
+            "include".to_owned(),
+            Value::Array(
+                settings
+                    .response_include
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+        );
+    }
+    if !settings.metadata.is_empty() {
+        payload.insert("metadata".to_owned(), json!(settings.metadata));
+    }
+    if let Some(reasoning) = &settings.reasoning {
+        payload.insert(
+            "reasoning".to_owned(),
+            json!({
+                "effort": reasoning.effort,
+                "summary": reasoning.summary,
+            }),
+        );
+    }
+    if let Some(verbosity) = &settings.verbosity {
+        payload.insert(
+            "text".to_owned(),
+            json!({
+                "verbosity": verbosity,
+            }),
+        );
+    }
+    for (key, value) in &settings.extra_body {
+        payload.insert(key.clone(), value.clone());
+    }
+}
+
+fn apply_chat_model_settings(
+    payload: &mut serde_json::Map<String, Value>,
+    settings: &agents_core::ModelSettings,
+    has_tools: bool,
+) {
+    if let Some(value) = settings.temperature {
+        payload.insert("temperature".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.top_p {
+        payload.insert("top_p".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.max_output_tokens {
+        payload.insert("max_tokens".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.frequency_penalty {
+        payload.insert("frequency_penalty".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.presence_penalty {
+        payload.insert("presence_penalty".to_owned(), json!(value));
+    }
+    if let Some(value) = settings.parallel_tool_calls {
+        payload.insert("parallel_tool_calls".to_owned(), json!(value));
+    }
+    if let Some(value) = &settings.tool_choice {
+        payload.insert("tool_choice".to_owned(), Value::String(value.clone()));
+    } else if has_tools {
+        payload.insert("tool_choice".to_owned(), Value::String("auto".to_owned()));
+    }
+    if let Some(value) = settings.top_logprobs {
+        payload.insert("logprobs".to_owned(), Value::Bool(true));
+        payload.insert("top_logprobs".to_owned(), json!(value));
+    }
+    for (key, value) in &settings.extra_body {
+        payload.insert(key.clone(), value.clone());
+    }
+}
+
+fn json_value_to_string(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => value.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| other.to_string()),
+    }
 }
 
 fn openai_response_input_item(item: &InputItem) -> Value {
@@ -684,7 +819,18 @@ mod tests {
             instructions: Some("Be precise".to_owned()),
             previous_response_id: None,
             conversation_id: None,
-            settings: Default::default(),
+            settings: agents_core::ModelSettings {
+                temperature: Some(0.3),
+                max_output_tokens: Some(256),
+                store: Some(true),
+                tool_choice: Some("required".to_owned()),
+                response_include: vec!["reasoning".to_owned()],
+                extra_body: std::collections::BTreeMap::from([(
+                    "service_tier".to_owned(),
+                    json!("priority"),
+                )]),
+                ..Default::default()
+            },
             input: vec![InputItem::from("hello")],
             tools: vec![
                 ToolDefinition::new("search", "Search").with_input_json_schema(json!({
@@ -701,6 +847,14 @@ mod tests {
         assert_eq!(payload["model"], "gpt-5");
         assert_eq!(payload["input"][0]["role"], "user");
         assert_eq!(payload["tools"][0]["type"], "function");
+        assert!(
+            (payload["temperature"].as_f64().unwrap_or_default() - 0.3).abs() < 0.000_1
+        );
+        assert_eq!(payload["max_output_tokens"], 256);
+        assert_eq!(payload["store"], true);
+        assert_eq!(payload["tool_choice"], "required");
+        assert_eq!(payload["include"][0], "reasoning");
+        assert_eq!(payload["service_tier"], "priority");
     }
 
     #[test]
@@ -714,7 +868,13 @@ mod tests {
             instructions: Some("Be brief".to_owned()),
             previous_response_id: None,
             conversation_id: None,
-            settings: Default::default(),
+            settings: agents_core::ModelSettings {
+                frequency_penalty: Some(0.4),
+                presence_penalty: Some(0.2),
+                parallel_tool_calls: Some(true),
+                top_logprobs: Some(3),
+                ..Default::default()
+            },
             input: vec![
                 InputItem::from("hello"),
                 InputItem::Json {
@@ -740,6 +900,14 @@ mod tests {
             payload["messages"][2]["tool_calls"][0]["function"]["name"],
             "search"
         );
+        assert!(
+            (payload["frequency_penalty"].as_f64().unwrap_or_default() - 0.4).abs() < 0.000_1
+        );
+        assert!(
+            (payload["presence_penalty"].as_f64().unwrap_or_default() - 0.2).abs() < 0.000_1
+        );
+        assert_eq!(payload["parallel_tool_calls"], true);
+        assert_eq!(payload["top_logprobs"], 3);
         assert_eq!(payload["tool_choice"], "auto");
     }
 

@@ -122,8 +122,10 @@ pub use mcp::{
 };
 pub use memory::Session as SessionABC;
 pub use memory::{
-    MemorySession, OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession,
-    SQLiteSession, Session, SessionSettings, is_openai_responses_compaction_aware_session,
+    MemorySession, OpenAIConversationAwareSession, OpenAIConversationSessionState,
+    OpenAIResponsesCompactionArgs, OpenAIResponsesCompactionAwareSession, SQLiteSession, Session,
+    SessionSettings, is_openai_conversation_aware_session,
+    is_openai_responses_compaction_aware_session,
 };
 pub use model::{
     Model, ModelProvider, ModelRequest, ModelResponse, ModelTracing, get_default_model,

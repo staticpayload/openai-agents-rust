@@ -15,4 +15,5 @@ agents-voice = { path = "../agents-voice" }
 tokio.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
 serde_json.workspace = true

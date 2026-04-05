@@ -4,9 +4,11 @@ use serde_json::Value;
 
 use agents_core::{Result, default_openai_key};
 
+use crate::config::RealtimeSessionModelSettings;
 use crate::model::{RealtimeModel, RealtimeModelConfig};
 use crate::model_events::{
-    RealtimeModelEvent, RealtimeModelResponseDoneEvent, RealtimeModelTranscriptDeltaEvent,
+    RealtimeModelAudioDoneEvent, RealtimeModelAudioInterruptedEvent, RealtimeModelEvent,
+    RealtimeModelResponseDoneEvent, RealtimeModelTranscriptDeltaEvent,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +59,32 @@ impl RealtimeModel for OpenAIRealtimeWebSocketModel {
                 payload: Some(Value::String(text.to_owned())),
             }),
         ])
+    }
+
+    async fn send_audio(&mut self, bytes: &[u8]) -> Result<Vec<RealtimeModelEvent>> {
+        Ok(vec![RealtimeModelEvent::AudioDone(
+            RealtimeModelAudioDoneEvent {
+                total_bytes: bytes.len(),
+            },
+        )])
+    }
+
+    async fn interrupt(&mut self) -> Result<Vec<RealtimeModelEvent>> {
+        Ok(vec![RealtimeModelEvent::AudioInterrupted(
+            RealtimeModelAudioInterruptedEvent {
+                reason: Some("interrupted".to_owned()),
+            },
+        )])
+    }
+
+    async fn update_session(
+        &mut self,
+        settings: &RealtimeSessionModelSettings,
+    ) -> Result<Vec<RealtimeModelEvent>> {
+        if let Some(model_name) = &settings.model_name {
+            self.config.model = Some(model_name.clone());
+        }
+        Ok(Vec::new())
     }
 }
 

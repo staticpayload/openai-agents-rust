@@ -16,8 +16,9 @@ pub(crate) fn apply_resumed_conversation_settings(config: &mut RunConfig, state:
 
 pub(crate) fn validate_session_conversation_settings(
     config: &RunConfig,
+    session: &(dyn Session + Sync),
 ) -> crate::errors::Result<()> {
-    crate::internal::session_persistence::validate_session_conversation_settings(config)
+    crate::internal::session_persistence::validate_session_conversation_settings(config, session)
 }
 
 pub(crate) fn merge_usage(previous: Usage, next: Usage) -> Usage {

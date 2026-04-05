@@ -3,12 +3,12 @@ use std::sync::Arc;
 use agents_core::Result;
 use futures::StreamExt;
 
-use crate::events::VoiceStreamEvent;
+use crate::events::{VoiceStreamEvent, VoiceStreamEventError, VoiceStreamEventLifecycle};
 use crate::input::{AudioInput, StreamedAudioInput};
 use crate::model::{STTModelSettings, TTSModel, TTSModelSettings, VoiceModelProvider};
 use crate::openai_model_provider::OpenAIVoiceModelProvider;
 use crate::pipeline_config::VoicePipelineConfig;
-use crate::result::StreamedAudioResult;
+use crate::result::{StreamedAudioResult, VoiceStreamRecorder};
 use crate::workflow::VoiceWorkflowBase;
 
 #[derive(Clone)]
@@ -36,7 +36,7 @@ impl VoicePipeline {
         self
     }
 
-    pub async fn run<W: VoiceWorkflowBase>(
+    pub async fn run<W: VoiceWorkflowBase + Clone + 'static>(
         &self,
         workflow: &W,
         input: AudioInput,
@@ -46,11 +46,11 @@ impl VoicePipeline {
         let transcription = stt_model
             .transcribe(&input, &STTModelSettings::default())
             .await?;
-        self.run_transcription(workflow, transcription, tts_model.as_ref())
+        self.run_transcription(workflow, transcription, tts_model)
             .await
     }
 
-    pub async fn run_streamed_audio_input<W: VoiceWorkflowBase>(
+    pub async fn run_streamed_audio_input<W: VoiceWorkflowBase + Clone + 'static>(
         &self,
         workflow: &W,
         input: StreamedAudioInput,
@@ -64,56 +64,79 @@ impl VoicePipeline {
             session.push_audio(&chunk).await?;
         }
         let transcription = session.finish().await?;
-        self.run_transcription(workflow, transcription, tts_model.as_ref())
+        self.run_transcription(workflow, transcription, tts_model)
             .await
     }
 
-    async fn run_transcription<W: VoiceWorkflowBase>(
+    async fn run_transcription<W: VoiceWorkflowBase + Clone + 'static>(
         &self,
         workflow: &W,
         transcription: String,
-        tts_model: &dyn TTSModel,
+        tts_model: Box<dyn TTSModel>,
     ) -> Result<StreamedAudioResult> {
-        let mut transcript = Vec::new();
-        let mut events = Vec::new();
-        let mut audio_chunks = 0usize;
+        let recorder = VoiceStreamRecorder::new(self.config.stream_audio);
+        let result = recorder.result();
+        let workflow = workflow.clone();
 
-        let mut intro = Box::pin(workflow.on_start());
-        while let Some(chunk) = intro.next().await {
-            let text: String = chunk?;
-            transcript.push(text.clone());
-            let synthesized = tts_model
-                .synthesize(&text, &TTSModelSettings::default())
-                .await?;
-            audio_chunks += synthesized
-                .iter()
-                .filter(|event| matches!(event, VoiceStreamEvent::Audio(_)))
-                .count();
-            events.extend(synthesized);
-        }
+        tokio::spawn(async move {
+            recorder
+                .push_events(vec![VoiceStreamEvent::Lifecycle(
+                    VoiceStreamEventLifecycle {
+                        event: "started".to_owned(),
+                    },
+                )])
+                .await;
 
-        let mut text_stream = Box::pin(workflow.run(transcription));
-        while let Some(chunk) = text_stream.next().await {
-            let text: String = chunk?;
-            transcript.push(text.clone());
-            let synthesized = tts_model
-                .synthesize(&text, &TTSModelSettings::default())
-                .await?;
-            audio_chunks += synthesized
-                .iter()
-                .filter(|event| matches!(event, VoiceStreamEvent::Audio(_)))
-                .count();
-            events.extend(synthesized);
-        }
+            let completion = async {
+                let mut intro = Box::pin(workflow.on_start());
+                while let Some(chunk) = intro.next().await {
+                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?).await?;
+                }
 
-        if !self.config.stream_audio {
-            audio_chunks = 0;
-        }
+                let mut text_stream = Box::pin(workflow.run(transcription));
+                while let Some(chunk) = text_stream.next().await {
+                    synthesize_chunk(&recorder, tts_model.as_ref(), chunk?).await?;
+                }
 
-        Ok(StreamedAudioResult {
-            transcript,
-            audio_chunks,
-            events,
-        })
+                Result::<()>::Ok(())
+            }
+            .await;
+
+            match completion {
+                Ok(()) => {
+                    recorder
+                        .push_events(vec![VoiceStreamEvent::Lifecycle(
+                            VoiceStreamEventLifecycle {
+                                event: "completed".to_owned(),
+                            },
+                        )])
+                        .await;
+                    recorder.complete().await;
+                }
+                Err(error) => {
+                    recorder
+                        .push_events(vec![VoiceStreamEvent::Error(VoiceStreamEventError {
+                            error: error.to_string(),
+                        })])
+                        .await;
+                    recorder.fail(error).await;
+                }
+            }
+        });
+
+        Ok(result)
     }
+}
+
+async fn synthesize_chunk(
+    recorder: &VoiceStreamRecorder,
+    tts_model: &dyn TTSModel,
+    text: String,
+) -> Result<()> {
+    recorder.push_transcript(text.clone()).await;
+    let synthesized = tts_model
+        .synthesize(&text, &TTSModelSettings::default())
+        .await?;
+    recorder.push_events(synthesized).await;
+    Ok(())
 }

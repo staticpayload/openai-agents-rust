@@ -56,6 +56,7 @@ version = "0.1.0"
 dependencies = [
  "agents-core",
  "async-trait",
+ "futures",
  "serde",
  "serde_json",
  "tokio",
@@ -1058,6 +1059,7 @@ dependencies = [
  "agents-openai",
  "agents-realtime",
  "agents-voice",
+ "async-trait",
  "serde_json",
  "tokio",
 ]

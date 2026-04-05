@@ -9,6 +9,7 @@ use crate::errors::Result;
 use crate::items::InputItem;
 use crate::memory::session_settings::{SessionSettings, resolve_session_limit};
 use crate::memory::util::apply_session_limit;
+use crate::model::ModelResponse;
 
 /// Arguments for compaction-aware OpenAI responses sessions.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -17,6 +18,13 @@ pub struct OpenAIResponsesCompactionArgs {
     pub compaction_mode: Option<String>,
     pub store: Option<bool>,
     pub force: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct OpenAIConversationSessionState {
+    pub conversation_id: Option<String>,
+    pub previous_response_id: Option<String>,
+    pub auto_previous_response_id: bool,
 }
 
 #[async_trait]
@@ -43,14 +51,42 @@ pub trait Session: Send + Sync {
         self.clear_session().await
     }
 
+    fn conversation_session(&self) -> Option<&dyn OpenAIConversationAwareSession> {
+        None
+    }
+
     fn compaction_session(&self) -> Option<&dyn OpenAIResponsesCompactionAwareSession> {
         None
     }
 }
 
 #[async_trait]
+pub trait OpenAIConversationAwareSession: Session {
+    async fn load_openai_conversation_state(&self) -> Result<OpenAIConversationSessionState>;
+
+    async fn save_openai_conversation_state(
+        &self,
+        state: OpenAIConversationSessionState,
+    ) -> Result<()>;
+
+    async fn on_openai_model_response(&self, response: &ModelResponse) -> Result<()> {
+        let mut state = self.load_openai_conversation_state().await?;
+        if response.response_id.is_some()
+            && (state.auto_previous_response_id || state.previous_response_id.is_some())
+        {
+            state.previous_response_id = response.response_id.clone();
+        }
+        self.save_openai_conversation_state(state).await
+    }
+}
+
+#[async_trait]
 pub trait OpenAIResponsesCompactionAwareSession: Session {
     async fn run_compaction(&self, args: Option<OpenAIResponsesCompactionArgs>) -> Result<()>;
+}
+
+pub fn is_openai_conversation_aware_session(session: &dyn Session) -> bool {
+    session.conversation_session().is_some()
 }
 
 pub fn is_openai_responses_compaction_aware_session(session: &dyn Session) -> bool {

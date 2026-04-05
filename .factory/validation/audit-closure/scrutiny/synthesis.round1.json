@@ -1,0 +1,77 @@
+{
+  "milestone": "audit-closure",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test -q --workspace",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 5,
+    "passed": 1,
+    "failed": 4,
+    "failedFeatures": [
+      "close-extension-transport-parity-and-realtime-compat",
+      "audit-core-session-and-conversation-parity",
+      "audit-mcp-runtime-parity",
+      "build-parity-ledger-and-doc-contract-harness"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "close-extension-transport-parity-and-realtime-compat",
+      "severity": "blocking",
+      "description": "Cloudflare fetch-upgrade requests still omit the JS parity header `X-OpenAI-Agents-SDK`, so VAL-EXT-001 is not fully met."
+    },
+    {
+      "featureId": "audit-core-session-and-conversation-parity",
+      "severity": "blocking",
+      "description": "`session_input_callback` persistence attribution still matches duplicate-valued callback output against new-turn items before history, diverging from upstream provenance semantics required by VAL-CORE-005."
+    },
+    {
+      "featureId": "audit-mcp-runtime-parity",
+      "severity": "blocking",
+      "description": "`MCPServerManager::connect_all()` now clears `active_servers` after a strict connect failure, regressing the upstream behavior that preserves the previous active set."
+    },
+    {
+      "featureId": "build-parity-ledger-and-doc-contract-harness",
+      "severity": "blocking",
+      "description": "`docs_contract` portability coverage only rejects `/Users/...` and `\\Users\\...`, so generic machine-local absolute links can still pass despite VAL-AUDIT-003."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "services.yaml",
+      "description": "Added a `docs_contract` command so the shared command manifest exposes the docs contract suite introduced by the audit harness.",
+      "sourceFeature": "build-parity-ledger-and-doc-contract-harness"
+    },
+    {
+      "target": "library",
+      "description": "Documented that Cloudflare realtime transport parity includes the JS common realtime header bundle, including `User-Agent` and `X-OpenAI-Agents-SDK`.",
+      "sourceFeature": "close-extension-transport-parity-and-realtime-compat"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "runtime-parity-worker skill",
+      "suggestion": "Require explicit transcript evidence of a pre-change failing targeted test, or relax the procedure language for audit-only test-addition features where that step is intentionally skipped.",
+      "evidence": "The review for `audit-core-runner-tool-and-handoff-parity` found that the transcript moved from research into edits and only showed targeted test executions after the patch, while the handoff still marked `skillFeedback.followedProcedure` as true.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

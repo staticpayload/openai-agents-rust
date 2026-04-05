@@ -1,0 +1,36 @@
+{
+  "featureId": "fix-docs-contract-generic-absolute-path-detection",
+  "reviewedAt": "2026-04-05T11:02:00Z",
+  "commitId": "dc5836d32174c3f1c6cb0a379d6c3cc8ef84c917",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The fix broadens the portability detector to catch Linux home/workspace roots and backslash-style Windows drive paths, and the current parity-adjacent docs are clean. However, the detector still misses forward-slash Windows drive absolute paths, so the docs contract remains narrower than the generic machine-local absolute-path rejection required by the prior blocker.",
+    "issues": [
+      {
+        "file": "crates/openai-agents/tests/docs_contract.rs",
+        "line": 29,
+        "severity": "blocking",
+        "description": "`contains_machine_local_absolute_path` only recognizes drive-letter Windows paths when the separator after `X:` is `\\`. Forward-slash forms such as `D:/a/openai-agents-rust/openai-agents-rust/docs/BEHAVIOR_PARITY.md` still return false, so the docs contract can miss machine-local absolute paths that use Windows drive letters with `/`. The regression added in this fix only covers the backslash variant (`D:\\a\\...`), leaving the original blocker only partially resolved."
+      }
+    ]
+  },
+  "issues": [
+    {
+      "file": "crates/openai-agents/tests/docs_contract.rs",
+      "line": 29,
+      "severity": "blocking",
+      "description": "The portability detector still accepts forward-slash Windows drive absolute paths like `D:/a/...`, so it does not yet reject generic machine-local absolute paths across the common Windows forms this audit is meant to guard against."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "area": "services",
+      "observation": "The shared `docs_audit` command still omits `docs_contract`, even though the docs portability/readme harness is part of the audit surface for VAL-AUDIT-003 and VAL-AUDIT-004.",
+      "evidence": ".factory/services.yaml:7-8 defines `docs_audit` as `cargo test -q -p openai-agents --test behavior_parity --test root_export_parity` and keeps `docs_contract` as a separate command, so the named audit entrypoint does not run the portability harness this feature modified."
+    }
+  ],
+  "addressesFailureFrom": ".factory/validation/audit-closure/scrutiny/reviews/build-parity-ledger-and-doc-contract-harness.json",
+  "summary": "Reviewed the fix transcript skeleton, both the original and fix diffs, and the current repo state. The docs are currently clean and the detector now covers several non-macOS path shapes, but it still misses forward-slash Windows drive absolute paths, so the prior blocker is not fully closed."
+}

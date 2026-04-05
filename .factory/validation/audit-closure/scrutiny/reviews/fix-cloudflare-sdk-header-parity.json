@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-cloudflare-sdk-header-parity",
+  "reviewedAt": "2026-04-05T10:57:25Z",
+  "commitId": "5a0a531cef79c31e459dea7c2c4c7f6176f15ae8",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The fix directly closes the prior blocker: `CloudflareRealtimeTransportLayer::build_upgrade_request` now adds `X-OpenAI-Agents-SDK` alongside the existing upgrade/auth headers, crate-local coverage asserts the exact value, and the public facade regression test now checks the same contract while the rest of the transport logic remains unchanged.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": ".factory/validation/audit-closure/scrutiny/reviews/close-extension-transport-parity-and-realtime-compat.json",
+  "summary": "Reviewed the fix transcript skeleton, the original and fix diffs, the current repository state, and the shared-state guidance. The Cloudflare fetch-upgrade path now matches the JS common-header parity requirement for `X-OpenAI-Agents-SDK` without changing the surrounding transport behavior, so the prior blocker is resolved."
+}

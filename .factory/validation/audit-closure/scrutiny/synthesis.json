@@ -1,6 +1,6 @@
 {
   "milestone": "audit-closure",
-  "round": 1,
+  "round": 2,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,58 +20,39 @@
     }
   },
   "reviewsSummary": {
-    "total": 5,
+    "total": 4,
     "passed": 1,
-    "failed": 4,
+    "failed": 3,
     "failedFeatures": [
-      "close-extension-transport-parity-and-realtime-compat",
-      "audit-core-session-and-conversation-parity",
-      "audit-mcp-runtime-parity",
-      "build-parity-ledger-and-doc-contract-harness"
+      "fix-session-input-callback-duplicate-provenance",
+      "fix-mcp-strict-connect-active-server-preservation",
+      "fix-docs-contract-generic-absolute-path-detection"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "close-extension-transport-parity-and-realtime-compat",
+      "featureId": "fix-session-input-callback-duplicate-provenance",
       "severity": "blocking",
-      "description": "Cloudflare fetch-upgrade requests still omit the JS parity header `X-OpenAI-Agents-SDK`, so VAL-EXT-001 is not fully met."
+      "description": "`session_input_callback` provenance still falls back to history-first frequency matching for duplicate-valued JSON inputs whose identity is not tracked (objects, numbers, booleans, and null), so callback-shaped persistence can still misattribute new-turn items to history."
     },
     {
-      "featureId": "audit-core-session-and-conversation-parity",
+      "featureId": "fix-mcp-strict-connect-active-server-preservation",
       "severity": "blocking",
-      "description": "`session_input_callback` persistence attribution still matches duplicate-valued callback output against new-turn items before history, diverging from upstream provenance semantics required by VAL-CORE-005."
+      "description": "`MCPServerManager::connect_all()` restores only the previously connected subset on strict failure, so previously active failed servers are still dropped when `drop_failed_servers = false` instead of preserving the full prior active set."
     },
     {
-      "featureId": "audit-mcp-runtime-parity",
+      "featureId": "fix-docs-contract-generic-absolute-path-detection",
       "severity": "blocking",
-      "description": "`MCPServerManager::connect_all()` now clears `active_servers` after a strict connect failure, regressing the upstream behavior that preserves the previous active set."
-    },
-    {
-      "featureId": "build-parity-ledger-and-doc-contract-harness",
-      "severity": "blocking",
-      "description": "`docs_contract` portability coverage only rejects `/Users/...` and `\\Users\\...`, so generic machine-local absolute links can still pass despite VAL-AUDIT-003."
+      "description": "`contains_machine_local_absolute_path` still misses forward-slash Windows drive absolute paths such as `D:/a/...`, so the docs contract remains narrower than the generic machine-local absolute-path rejection expected by the audit blocker."
     }
   ],
-  "appliedUpdates": [
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [
     {
-      "target": "services.yaml",
-      "description": "Added a `docs_contract` command so the shared command manifest exposes the docs contract suite introduced by the audit harness.",
-      "sourceFeature": "build-parity-ledger-and-doc-contract-harness"
-    },
-    {
-      "target": "library",
-      "description": "Documented that Cloudflare realtime transport parity includes the JS common realtime header bundle, including `User-Agent` and `X-OpenAI-Agents-SDK`.",
-      "sourceFeature": "close-extension-transport-parity-and-realtime-compat"
+      "observation": "The shared `docs_audit` command omits `docs_contract` even though the docs portability and README harness are part of the audit surface.",
+      "reason": "Rejected as an ambiguous services.yaml change for the validator to apply directly: the manifest already exposes `docs_contract` separately, and changing the semantics of the existing `docs_audit` entry would be a non-additive naming/ownership decision rather than a low-risk factual update."
     }
   ],
-  "suggestedGuidanceUpdates": [
-    {
-      "target": "runtime-parity-worker skill",
-      "suggestion": "Require explicit transcript evidence of a pre-change failing targeted test, or relax the procedure language for audit-only test-addition features where that step is intentionally skipped.",
-      "evidence": "The review for `audit-core-runner-tool-and-handoff-parity` found that the transcript moved from research into edits and only showed targeted test executions after the patch, while the handoff still marked `skillFeedback.followedProcedure` as true.",
-      "isSystemic": false
-    }
-  ],
-  "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/audit-closure/scrutiny/synthesis.round1.json"
 }

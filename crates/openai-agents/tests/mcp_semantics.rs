@@ -23,6 +23,8 @@ struct FakeMcpServerState {
 struct FakeMcpServer {
     name: String,
     state: Arc<FakeMcpServerState>,
+    tools: Vec<MCPTool>,
+    fail_tool_name: Option<String>,
 }
 
 impl FakeMcpServer {
@@ -32,6 +34,18 @@ impl FakeMcpServer {
             Arc::new(Self {
                 name: name.to_owned(),
                 state: state.clone(),
+                tools: vec![MCPTool {
+                    name: "lookup".to_owned(),
+                    description: Some("Lookup MCP data".to_owned()),
+                    input_schema: Some(json!({
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    })),
+                    namespace: Some(name.to_owned()),
+                    ..MCPTool::default()
+                }],
+                fail_tool_name: None,
             }),
             state,
         )
@@ -46,9 +60,39 @@ impl FakeMcpServer {
             Arc::new(Self {
                 name: name.to_owned(),
                 state: state.clone(),
+                tools: vec![MCPTool {
+                    name: "lookup".to_owned(),
+                    description: Some("Lookup MCP data".to_owned()),
+                    input_schema: Some(json!({
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    })),
+                    namespace: Some(name.to_owned()),
+                    ..MCPTool::default()
+                }],
+                fail_tool_name: None,
             }),
             state,
         )
+    }
+
+    fn with_tools(self: Arc<Self>, tools: Vec<MCPTool>) -> Arc<Self> {
+        Arc::new(Self {
+            name: self.name.clone(),
+            state: self.state.clone(),
+            tools,
+            fail_tool_name: self.fail_tool_name.clone(),
+        })
+    }
+
+    fn with_failing_tool(self: Arc<Self>, tool_name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: self.name.clone(),
+            state: self.state.clone(),
+            tools: self.tools.clone(),
+            fail_tool_name: Some(tool_name.to_owned()),
+        })
     }
 }
 
@@ -75,17 +119,7 @@ impl MCPServer for FakeMcpServer {
 
     async fn list_tools(&self) -> Result<Vec<MCPTool>> {
         self.state.list_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![MCPTool {
-            name: "lookup".to_owned(),
-            description: Some("Lookup MCP data".to_owned()),
-            input_schema: Some(json!({
-                "type": "object",
-                "properties": { "query": { "type": "string" } },
-                "required": ["query"]
-            })),
-            namespace: Some(self.name.clone()),
-            ..MCPTool::default()
-        }])
+        Ok(self.tools.clone())
     }
 
     async fn call_tool(
@@ -95,6 +129,11 @@ impl MCPServer for FakeMcpServer {
         _meta: Option<Value>,
     ) -> Result<ToolOutput> {
         self.state.tool_calls.fetch_add(1, Ordering::SeqCst);
+        if self.fail_tool_name.as_deref() == Some(tool_name) {
+            return Err(openai_agents::AgentsError::message(format!(
+                "tool `{tool_name}` crashed"
+            )));
+        }
         Ok(ToolOutput::from(format!("{tool_name}:{arguments}")))
     }
 }
@@ -279,6 +318,7 @@ async fn streamable_http_server_exposes_resources_once_connected() {
         "docs",
         MCPServerStreamableHttpParams {
             url: "http://localhost:8000/mcp".to_owned(),
+            ..MCPServerStreamableHttpParams::default()
         },
     )
     .with_resources(vec![MCPResource {
@@ -326,4 +366,117 @@ async fn streamable_http_server_exposes_resources_once_connected() {
     assert_eq!(resources.resources.len(), 1);
     assert_eq!(templates.resource_templates.len(), 1);
     assert_eq!(content.contents.len(), 1);
+}
+
+#[tokio::test]
+async fn runner_fails_clearly_for_unknown_mcp_tool_names() {
+    let (server, _state) = FakeMcpServer::new("docs");
+    let provider = FakeMcpProvider {
+        model: Arc::new(FakeMcpModelUnknownTool),
+    };
+    let agent = Agent::builder("assistant")
+        .mcp_server(server as Arc<dyn MCPServer>)
+        .build();
+
+    let error = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&agent, "hello")
+        .await
+        .expect_err("unknown MCP tool should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("model requested unknown local function tool `missing_lookup`")
+    );
+}
+
+#[tokio::test]
+async fn runner_fails_clearly_for_duplicate_mcp_tool_names() {
+    let (server_a, _) = FakeMcpServer::new("docs-a");
+    let server_a = server_a.with_tools(vec![MCPTool {
+        name: "lookup".to_owned(),
+        namespace: Some("docs-a".to_owned()),
+        ..MCPTool::default()
+    }]);
+    let (server_b, _) = FakeMcpServer::new("docs-b");
+    let server_b = server_b.with_tools(vec![MCPTool {
+        name: "lookup".to_owned(),
+        namespace: Some("docs-b".to_owned()),
+        ..MCPTool::default()
+    }]);
+    let provider = FakeMcpProvider {
+        model: Arc::new(FakeMcpModelUnknownTool),
+    };
+    let agent = Agent::builder("assistant")
+        .mcp_server(server_a as Arc<dyn MCPServer>)
+        .mcp_server(server_b as Arc<dyn MCPServer>)
+        .build();
+
+    let error = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&agent, "hello")
+        .await
+        .expect_err("duplicate MCP tool names should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate MCP tool name `lookup` across servers")
+    );
+}
+
+#[tokio::test]
+async fn runner_surfaces_failing_mcp_tools_as_tool_outputs() {
+    let (server, state) = FakeMcpServer::new("docs");
+    let server = server.with_failing_tool("lookup");
+    let provider = FakeMcpProvider {
+        model: Arc::new(FakeMcpModel::default()),
+    };
+    let agent = Agent::builder("assistant")
+        .mcp_server(server as Arc<dyn MCPServer>)
+        .build();
+
+    let result = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&agent, "hello")
+        .await
+        .expect("run should succeed with error output");
+
+    assert_eq!(state.tool_calls.load(Ordering::SeqCst), 1);
+    let tool_output = result
+        .new_items
+        .iter()
+        .find_map(|item| match item {
+            RunItem::ToolCallOutput { output, .. } => Some(output),
+            _ => None,
+        })
+        .expect("tool call output item");
+    match tool_output {
+        OutputItem::Text { text } => {
+            assert!(text.contains("Tool `lookup` failed: tool `lookup` crashed"));
+        }
+        other => panic!("expected text tool output, got {other:?}"),
+    }
+}
+
+#[derive(Clone, Default)]
+struct FakeMcpModelUnknownTool;
+
+#[async_trait]
+impl Model for FakeMcpModelUnknownTool {
+    async fn generate(&self, request: ModelRequest) -> Result<ModelResponse> {
+        Ok(ModelResponse {
+            model: request.model,
+            output: vec![OutputItem::ToolCall {
+                call_id: "call-mcp-missing".to_owned(),
+                tool_name: "missing_lookup".to_owned(),
+                arguments: json!({}),
+                namespace: None,
+            }],
+            usage: Default::default(),
+            response_id: Some("resp-mcp-missing".to_owned()),
+            request_id: Some("req-mcp-missing".to_owned()),
+        })
+    }
 }

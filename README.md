@@ -18,6 +18,14 @@ This repository currently contains:
 - `crates/agents-extensions`: optional integrations and experimental features
 - `crates/openai-agents`: public facade crate
 
+## Facade surface
+
+The `openai-agents` facade exposes the cross-crate runtime most users interact with:
+
+- core runner entry points such as `run`, `run_streamed`, and `run_with_session`
+- top-level OpenAI runtime exports including `OpenAIProvider`, `OpenAIResponsesModel`, and `OpenAIChatCompletionsModel`
+- namespace modules for `realtime`, `voice`, and `extensions`
+
 ## Reference sources
 
 - `reference/openai-agents-python`

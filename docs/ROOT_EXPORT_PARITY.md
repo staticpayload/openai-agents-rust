@@ -11,6 +11,16 @@ Every Python root export falls into exactly one bucket:
 
 All Python root exports not listed below are surfaced directly from the Rust facade.
 
+### Facade cross-crate surface
+
+Beyond the Python-root export mapping above, the Rust facade documents the main
+cross-crate surface users reach through `crates/openai-agents/src/lib.rs`:
+
+- runner entry points: `run`, `run_streamed`, and `run_with_session`
+- top-level OpenAI runtime exports: `OpenAIProvider`,
+  `OpenAIResponsesModel`, and `OpenAIChatCompletionsModel`
+- namespace modules: `realtime`, `voice`, and `extensions`
+
 ## Aliased
 
 - `AgentsException` -> `AgentsError`

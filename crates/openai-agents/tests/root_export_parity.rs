@@ -170,3 +170,44 @@ fn facade_exposes_documented_namespace_modules() {
         );
     }
 }
+
+#[test]
+fn root_export_doc_describes_cross_crate_facade_surface() {
+    let root = workspace_root();
+    let facade = fs::read_to_string(root.join("crates/openai-agents/src/lib.rs"))
+        .expect("rust facade lib.rs");
+    let parity_doc =
+        fs::read_to_string(root.join("docs/ROOT_EXPORT_PARITY.md")).expect("root parity doc");
+
+    for surface in [
+        "### Facade cross-crate surface",
+        "`run`",
+        "`run_streamed`",
+        "`run_with_session`",
+        "`OpenAIProvider`",
+        "`OpenAIResponsesModel`",
+        "`OpenAIChatCompletionsModel`",
+        "`realtime`",
+        "`voice`",
+        "`extensions`",
+    ] {
+        assert!(
+            parity_doc.contains(surface),
+            "Root export parity doc should describe facade surface item {surface}"
+        );
+    }
+
+    for export in [
+        "run,",
+        "run_streamed,",
+        "run_with_session,",
+        "OpenAIProvider",
+        "OpenAIResponsesModel",
+        "OpenAIChatCompletionsModel",
+    ] {
+        assert!(
+            facade.contains(export),
+            "Facade is missing documented cross-crate export {export}"
+        );
+    }
+}

@@ -124,10 +124,19 @@ fn readme_describes_current_runtime_instead_of_bootstrap_scaffolding() {
         "`crates/agents-voice`",
         "`crates/agents-extensions`",
         "`crates/openai-agents`",
+        "`run`",
+        "`run_streamed`",
+        "`run_with_session`",
+        "`OpenAIProvider`",
+        "`OpenAIResponsesModel`",
+        "`OpenAIChatCompletionsModel`",
+        "`realtime`",
+        "`voice`",
+        "`extensions`",
     ] {
         assert!(
             readme.contains(expected),
-            "README should describe the shipped workspace crate layout, missing {expected}"
+            "README should describe the shipped crate layout and facade surface, missing {expected}"
         );
     }
 }

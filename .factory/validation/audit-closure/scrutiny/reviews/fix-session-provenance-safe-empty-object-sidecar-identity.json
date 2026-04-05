@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-session-provenance-safe-empty-object-sidecar-identity",
+  "reviewedAt": "2026-04-05T12:40:34.096969+00:00",
+  "commitId": "af310fdc306d2274d621794a7358a0e612aed57c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Compared the original failed commit `38f8387` with the rerun commit `af310fd` against the prior scrutiny finding. The rerun does remove the unsafe raw-byte hashing from the empty-object identity path and keeps the public `InputItem` enum unchanged (`crates/agents-core/src/items.rs:10-12`), while the existing history-side/new-turn empty-object regressions still exist in `crates/agents-core/src/internal/session_persistence.rs:431-542` and the facade regression still exercises downstream construction/pattern matching without provenance fields (`crates/openai-agents/tests/openai_session_semantics.rs:115-166`). However, the new sidecar detector treats any one-entry object whose key/value match the internal prefix as an empty-object sidecar (`crates/agents-core/src/internal/session_persistence.rs:231-300`), and `prepare_input_with_session` strips such objects before returning prepared input or persisted session items (`crates/agents-core/src/internal/session_persistence.rs:50-90, 201-202`). That means a legitimate user JSON object can be silently rewritten to `{}` during `session_input_callback` attribution, so the safety rerun introduces a new correctness regression and does not fully satisfy the feature.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/session_persistence.rs",
+        "line": 271,
+        "severity": "blocking",
+        "description": "`empty_json_object_identity` now classifies any single-entry object with the `__agents_internal_empty_object_identity_<n>__` key/value shape as an internal empty-object sidecar (`session_persistence.rs:271-292`). Because `prepare_input_with_session` normalizes every callback result through `strip_empty_json_object_identity` and `session_item_key` (`session_persistence.rs:52, 202, 294-300`), a real user payload of that exact shape will be misidentified and stripped to `{}` in prepared input and persisted session items. The unsafe raw-byte hashing is gone, but the replacement sidecar namespace is not collision-proof, so this fix introduces a new public correctness regression in the callback persistence path."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "`runtime-parity-worker` currently requires a failing test before implementation, but safety-only reruns like this one may not have an externally observable red test even when internal helper safety work is required. The worker had to deviate by introducing the helper regression alongside the implementation.",
+      "evidence": "`.factory/skills/runtime-parity-worker/SKILL.md` steps 4-5 require adding a failing test first; the handoff for `fix-session-provenance-safe-empty-object-sidecar-identity` records `skillFeedback.followedProcedure=false` for `TDD red/green ordering`, and the transcript skeleton shows the new sidecar regression was added in the same patch before isolated execution."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/audit-closure/scrutiny/reviews/fix-session-provenance-history-side-empty-object-attribution.json",
+  "summary": "The rerun removes the unsafe raw-byte hashing and keeps the public `InputItem` API unchanged, but it still fails scrutiny because the sidecar marker scheme can collide with legitimate user JSON and strip that data to `{}` during `session_input_callback` attribution."
+}

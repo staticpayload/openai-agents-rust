@@ -17,9 +17,9 @@ impl Default for RealtimeAudioFormat {
 
 pub fn to_realtime_audio_format(value: impl AsRef<str>) -> RealtimeAudioFormat {
     match value.as_ref() {
-        "pcm16" => RealtimeAudioFormat::Pcm16,
-        "g711_ulaw" => RealtimeAudioFormat::G711Ulaw,
-        "g711_alaw" => RealtimeAudioFormat::G711Alaw,
+        "pcm16" | "pcm" | "audio/pcm" => RealtimeAudioFormat::Pcm16,
+        "g711_ulaw" | "pcmu" | "audio/pcmu" => RealtimeAudioFormat::G711Ulaw,
+        "g711_alaw" | "pcma" | "audio/pcma" => RealtimeAudioFormat::G711Alaw,
         other => RealtimeAudioFormat::Custom(other.to_owned()),
     }
 }
@@ -45,6 +45,31 @@ mod tests {
         assert_eq!(
             to_realtime_audio_format("opus"),
             RealtimeAudioFormat::Custom("opus".to_owned())
+        );
+    }
+
+    #[test]
+    fn converts_legacy_and_mime_aliases() {
+        assert_eq!(to_realtime_audio_format("pcm"), RealtimeAudioFormat::Pcm16);
+        assert_eq!(
+            to_realtime_audio_format("audio/pcm"),
+            RealtimeAudioFormat::Pcm16
+        );
+        assert_eq!(
+            to_realtime_audio_format("pcmu"),
+            RealtimeAudioFormat::G711Ulaw
+        );
+        assert_eq!(
+            to_realtime_audio_format("audio/pcmu"),
+            RealtimeAudioFormat::G711Ulaw
+        );
+        assert_eq!(
+            to_realtime_audio_format("pcma"),
+            RealtimeAudioFormat::G711Alaw
+        );
+        assert_eq!(
+            to_realtime_audio_format("audio/pcma"),
+            RealtimeAudioFormat::G711Alaw
         );
     }
 }

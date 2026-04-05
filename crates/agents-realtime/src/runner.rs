@@ -48,6 +48,7 @@ impl RealtimeRunner {
                 config: RealtimeModelConfig { model: model_name },
                 transport: TransportConfig::default(),
                 connected: false,
+                last_session_payload: None,
             }))
             .await;
         session.connect(Some(effective_agent.clone())).await?;

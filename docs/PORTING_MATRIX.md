@@ -178,5 +178,5 @@ Python source files mapped: **168**.
 ## Root Export Parity
 
 Root-export parity against Python `agents.__all__` is tracked separately in
-[ROOT_EXPORT_PARITY.md](/Users/staticpayload/Mainframe/openai-agents-rust/docs/ROOT_EXPORT_PARITY.md)
+[ROOT_EXPORT_PARITY.md](./ROOT_EXPORT_PARITY.md)
 and enforced by the `openai-agents` integration test suite.

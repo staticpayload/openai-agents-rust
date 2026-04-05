@@ -5,7 +5,7 @@ Python root-export parity is tracked against
 
 Every Python root export falls into exactly one bucket:
 
-- surfaced directly from [openai-agents facade](/Users/staticpayload/Mainframe/openai-agents-rust/crates/openai-agents/src/lib.rs)
+- surfaced directly from [`crates/openai-agents/src/lib.rs`](../crates/openai-agents/src/lib.rs)
 - aliased to a Rust-first equivalent listed below
 - intentionally omitted because the Python name is only a typing helper or TypedDict helper
 

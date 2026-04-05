@@ -18,12 +18,6 @@ OUTPUT_PATH = DOCS_ROOT / "BEHAVIOR_PARITY.md"
 
 DEFAULT_STATUS = "omitted-with-rationale"
 DEFAULT_COVERAGE = ["n/a"]
-DEFAULT_NOTE = (
-    "Tracked upstream family; Rust parity is not yet closed for this family in the current "
-    "runtime audit."
-)
-
-
 SECTION_ORDER = [
     "Core Runner",
     "Agent / Tool",
@@ -37,6 +31,66 @@ SECTION_ORDER = [
     "Extensions",
     "JS Package Families",
 ]
+
+
+def default_note_for_family(family: str) -> str:
+    section = section_for_family(family)
+    if section == "Core Runner":
+        return (
+            "Runner parity for this upstream family has not landed in the shared Rust runtime "
+            "yet; keep it omitted until equivalent run semantics and executable tests exist."
+        )
+    if section == "Agent / Tool":
+        return (
+            "Agent/tool parity for this upstream family is still missing a concrete Rust "
+            "runtime surface and matching executable tests."
+        )
+    if section == "Sessions":
+        return (
+            "Session parity for this upstream family is not wired through the Rust runtime yet, "
+            "so it stays omitted until the session behavior and tests land."
+        )
+    if section == "Model Settings / Providers":
+        return (
+            "Model-settings/provider parity for this upstream family is still open in Rust and "
+            "needs an executable runtime contract before it can be covered."
+        )
+    if section == "OpenAI":
+        return (
+            "OpenAI-specific parity for this upstream family remains open; leave it omitted "
+            "until the corresponding provider/runtime behavior and tests ship."
+        )
+    if section == "MCP":
+        return (
+            "MCP parity for this upstream family is still incomplete in the Rust runtime, so it "
+            "remains omitted pending executable coverage."
+        )
+    if section == "Realtime":
+        return (
+            "Realtime parity for this upstream family is not fully implemented in Rust yet; "
+            "keep it omitted until the runtime path and tests exist."
+        )
+    if section == "Voice":
+        return (
+            "Voice parity for this upstream family is still missing from the Rust runtime, so "
+            "it remains omitted until executable coverage lands."
+        )
+    if section == "Tracing":
+        return (
+            "Tracing parity for this upstream family has not been ported into the Rust runtime "
+            "and test surface yet."
+        )
+    if section == "Extensions":
+        return (
+            "Extension parity for this upstream family is still unimplemented or unverified in "
+            "Rust, so the row stays omitted for now."
+        )
+    if section == "JS Package Families":
+        return (
+            "This JS package-shape family still lacks an equivalent Rust facade/runtime contract "
+            "with executable coverage, so it remains omitted."
+        )
+    raise ValueError(f"Unknown section for family: {family}")
 
 
 def python_families() -> list[str]:
@@ -109,7 +163,7 @@ def build_rows() -> OrderedDict[str, list[tuple[str, dict[str, object]]]]:
         row = {
             "status": DEFAULT_STATUS,
             "coverage": DEFAULT_COVERAGE,
-            "notes": DEFAULT_NOTE,
+            "notes": default_note_for_family(family),
         }
         row.update(overrides.get(family, {}))
         rows[section_for_family(family)].append((family, row))

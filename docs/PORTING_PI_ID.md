@@ -27,7 +27,7 @@ This repository is intentionally bootstrapped in two layers:
   - Local path: `reference/openai-agents-js`
   - Pinned SHA: `5fd5b5306df3014e0582a8ad483b03eca381fd02`
 
-The generated matrix in [PORTING_MATRIX.md](/Users/staticpayload/Mainframe/openai-agents-rust/docs/PORTING_MATRIX.md) maps every Python source file to an intended Rust crate/module target.
+The generated matrix in [PORTING_MATRIX.md](./PORTING_MATRIX.md) maps every Python source file to an intended Rust crate/module target.
 
 ## Workspace Architecture
 
@@ -75,7 +75,7 @@ The generated matrix in [PORTING_MATRIX.md](/Users/staticpayload/Mainframe/opena
   - OpenAI memory session placeholders
 - Realtime, voice, and extension scaffolding crates
 - Regeneration script:
-  - [scripts/generate_porting_docs.py](/Users/staticpayload/Mainframe/openai-agents-rust/scripts/generate_porting_docs.py)
+  - [`scripts/generate_porting_docs.py`](../scripts/generate_porting_docs.py)
 
 ## Implementation Sequence
 

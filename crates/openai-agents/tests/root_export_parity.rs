@@ -116,3 +116,57 @@ fn python_root_exports_are_surfaced_or_documented() {
         missing.join(", ")
     );
 }
+
+#[test]
+fn documented_aliases_and_omissions_stay_live() {
+    let root = workspace_root();
+    let python_init =
+        fs::read_to_string(root.join("reference/openai-agents-python/src/agents/__init__.py"))
+            .expect("python __init__.py");
+    let facade = fs::read_to_string(root.join("crates/openai-agents/src/lib.rs"))
+        .expect("rust facade lib.rs");
+    let parity_doc =
+        fs::read_to_string(root.join("docs/ROOT_EXPORT_PARITY.md")).expect("root parity doc");
+
+    let exports = parse_python_root_exports(&python_init);
+    let aliases = parse_aliases(&parity_doc);
+    let omissions = parse_omissions(&parity_doc);
+
+    let stale_aliases = aliases
+        .iter()
+        .filter_map(|(python_name, rust_name)| {
+            (!exports.contains(python_name) || !facade.contains(rust_name))
+                .then_some(format!("{python_name} -> {rust_name}"))
+        })
+        .collect::<Vec<_>>();
+    let stale_omissions = omissions
+        .iter()
+        .filter(|name| !exports.contains(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    assert!(
+        stale_aliases.is_empty(),
+        "Root export parity aliases drifted from live Python exports or Rust facade exports: {}",
+        stale_aliases.join(", ")
+    );
+    assert!(
+        stale_omissions.is_empty(),
+        "Root export parity omissions refer to non-existent Python exports: {}",
+        stale_omissions.join(", ")
+    );
+}
+
+#[test]
+fn facade_exposes_documented_namespace_modules() {
+    let root = workspace_root();
+    let facade = fs::read_to_string(root.join("crates/openai-agents/src/lib.rs"))
+        .expect("rust facade lib.rs");
+
+    for namespace in ["realtime", "voice", "extensions"] {
+        assert!(
+            facade.contains(&format!("pub mod {namespace} {{")),
+            "Facade is missing documented `{namespace}` namespace export"
+        );
+    }
+}

@@ -7,7 +7,7 @@ This repository currently contains:
 - A hybrid Cargo workspace mirroring the planned crate boundaries.
 - Pinned local clones of the Python and JS/TS reference SDKs under `reference/`.
 - Generated porting docs under `docs/`, including a file-by-file translation matrix for the Python SDK.
-- An initial, compileable Rust facade and subsystem scaffolding that establishes the public API shape and crate boundaries before the deeper feature port begins.
+- A public Rust facade plus crate-split runtime surfaces for core runner flows, OpenAI integrations, realtime sessions, voice workflows, and extensions.
 
 ## Workspace layout
 
@@ -25,4 +25,4 @@ This repository currently contains:
 
 ## Current status
 
-The repository is in bootstrap mode. The Rust workspace builds, the public surface is scaffolded, and the porting matrix is generated from the pinned upstream repos. The feature-complete port still needs to be implemented module by module.
+The workspace builds and ships executable parity coverage across the facade, core runner, MCP, OpenAI session/runtime slices, realtime, voice, and extension transport surfaces. Remaining upstream families are tracked in `docs/BEHAVIOR_PARITY.md` until the corresponding Rust runtime behavior and tests land.

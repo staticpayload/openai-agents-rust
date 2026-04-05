@@ -1,22 +1,15 @@
 {
   "featureId": "refresh-ledgers-and-close-release-gate",
-  "reviewedAt": "2026-04-05T18:34:39.801664+00:00",
-  "commitId": "1af9bc714e6f555048119fbbc78fba9f6b9d15c5",
+  "reviewedAt": "2026-04-05T18:49:52.159370+00:00",
+  "commitId": "46d7b7256539b8d515c40fa1eea1343bfafa7938",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "The release-gate refresh documents the two accepted omissions explicitly and the worker transcript/handoff are consistent, but the ledger now overclaims coverage for `test_openai_chatcompletions_stream` and the new audit locks that incorrect claim in.",
-    "issues": [
-      {
-        "file": "docs/behavior_parity_overrides.json",
-        "line": 305,
-        "severity": "blocking",
-        "description": "`test_openai_chatcompletions_stream` is marked `covered` here, mirrored in `docs/BEHAVIOR_PARITY.md:147`, and enforced by `crates/openai-agents/tests/behavior_parity.rs:549-550`, but the only cited Rust evidence is `crates/agents-openai/src/models/chatcmpl_stream_handler.rs`, whose sole test at line 127 (`extracts_text_and_tool_chunks`) only checks a single chunk updates the transcript and yields two parts. The upstream family exercises substantially more behavior in `reference/openai-agents-python/tests/test_openai_chatcompletions_stream.py:38-421` (event sequencing, completed-response assembly, logprobs, refusal content, tool-call streaming, and real-time function-call arguments), so the final ledger is not truthful about executable parity evidence for this family."
-      }
-    ]
+    "summary": "The re-run resolves the prior blocker: the refreshed ledger and override keep `test_openai_chatcompletions_stream` omitted-with-rationale, and the release-gate audit now enforces that omission instead of overclaiming helper-level coverage. The accepted `test_session` and `test_server_conversation_tracker` omissions also remain explicit and narrow.",
+    "issues": []
   },
   "sharedStateObservations": [],
-  "addressesFailureFrom": null,
-  "summary": "Review failed: the final ledger refresh correctly records the accepted `test_session` and `test_server_conversation_tracker` omissions, but it incorrectly closes `test_openai_chatcompletions_stream` as covered without executable Rust validation matching that upstream family’s scope."
+  "addressesFailureFrom": "refresh-ledgers-and-close-release-gate",
+  "summary": "Pass: commit `46d7b72` fixes the prior scrutiny failure by reverting `test_openai_chatcompletions_stream` to `omitted-with-rationale` in `docs/behavior_parity_overrides.json:305`, regenerating `docs/BEHAVIOR_PARITY.md:147` to match, and updating `crates/openai-agents/tests/behavior_parity.rs:561-579` so the final release-gate audit requires the broader-streaming-family omission rationale rather than treating `chatcmpl_stream_handler` as sufficient executable parity evidence. I reviewed the worker transcript skeleton, handoff, and commit diff; given the repo still only shows helper-level Rust coverage in `crates/agents-openai/src/models/chatcmpl_stream_handler.rs`, the previous blocking issue is resolved and no new review issues were found."
 }

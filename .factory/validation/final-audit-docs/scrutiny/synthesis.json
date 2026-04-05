@@ -1,7 +1,7 @@
 {
   "milestone": "final-audit-docs",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -20,22 +20,14 @@
     }
   },
   "reviewsSummary": {
-    "total": 2,
+    "total": 1,
     "passed": 1,
-    "failed": 1,
-    "failedFeatures": [
-      "refresh-ledgers-and-close-release-gate"
-    ]
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
-    {
-      "featureId": "refresh-ledgers-and-close-release-gate",
-      "severity": "blocking",
-      "description": "`test_openai_chatcompletions_stream` is marked covered in docs/behavior_parity_overrides.json and docs/BEHAVIOR_PARITY.md, but the cited Rust evidence only contains a minimal single-chunk unit test in crates/agents-openai/src/models/chatcmpl_stream_handler.rs and does not provide executable parity coverage for the broader upstream streaming family."
-    }
-  ],
+  "blockingIssues": [],
   "appliedUpdates": [],
   "suggestedGuidanceUpdates": [],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/final-audit-docs/scrutiny/synthesis.round1.json"
 }

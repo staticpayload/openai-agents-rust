@@ -125,4 +125,4 @@ The project is pre-1.0. The runtime is already broad, but APIs may still tighten
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).

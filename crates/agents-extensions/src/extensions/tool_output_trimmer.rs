@@ -78,7 +78,7 @@ impl ToolOutputTrimmer {
             let item = &items[index];
             let is_user_message = match item {
                 InputItem::Text { .. } => true,
-                InputItem::Json { value, .. } => {
+                InputItem::Json { value } => {
                     value.get("role").and_then(Value::as_str) == Some("user")
                 }
             };
@@ -99,7 +99,7 @@ impl ToolOutputTrimmer {
     ) -> std::collections::BTreeMap<String, Vec<String>> {
         let mut mapping = std::collections::BTreeMap::new();
         for item in items {
-            let InputItem::Json { value, .. } = item else {
+            let InputItem::Json { value } = item else {
                 continue;
             };
             match value.get("type").and_then(Value::as_str) {
@@ -137,7 +137,7 @@ impl ToolOutputTrimmer {
         item: &InputItem,
         call_id_to_names: &std::collections::BTreeMap<String, Vec<String>>,
     ) -> Option<InputItem> {
-        let InputItem::Json { value, .. } = item else {
+        let InputItem::Json { value } = item else {
             return None;
         };
 
@@ -198,7 +198,6 @@ impl ToolOutputTrimmer {
         trimmed.insert("output".to_owned(), Value::String(summary));
         Some(InputItem::Json {
             value: Value::Object(trimmed),
-            provenance: None,
         })
     }
 
@@ -216,7 +215,6 @@ impl ToolOutputTrimmer {
             trimmed.insert("results".to_owned(), json!([{ "text": preview }]));
             return Some(InputItem::Json {
                 value: Value::Object(trimmed),
-                provenance: None,
             });
         }
 
@@ -233,7 +231,6 @@ impl ToolOutputTrimmer {
         trimmed.insert("tools".to_owned(), Value::Array(trimmed_tools));
         Some(InputItem::Json {
             value: Value::Object(trimmed),
-            provenance: None,
         })
     }
 
@@ -354,7 +351,6 @@ mod tests {
                 input: vec![
                     InputItem::Json {
                         value: json!({"role":"user","content":"older"}),
-                        provenance: None,
                     },
                     InputItem::Json {
                         value: json!({
@@ -362,7 +358,6 @@ mod tests {
                             "call_id":"call-1",
                             "name":"search"
                         }),
-                        provenance: None,
                     },
                     InputItem::Json {
                         value: json!({
@@ -370,11 +365,9 @@ mod tests {
                             "call_id":"call-1",
                             "output":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
                         }),
-                        provenance: None,
                     },
                     InputItem::Json {
                         value: json!({"role":"user","content":"recent"}),
-                        provenance: None,
                     },
                 ],
                 instructions: None,
@@ -384,7 +377,7 @@ mod tests {
         };
 
         let trimmed = trimmer.apply(&data).expect("trimmer should succeed");
-        let InputItem::Json { value, .. } = &trimmed.input[2] else {
+        let InputItem::Json { value } = &trimmed.input[2] else {
             panic!("expected json item");
         };
         let output = value

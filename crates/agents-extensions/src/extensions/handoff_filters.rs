@@ -12,7 +12,7 @@ fn is_filtered_run_item(item: &RunItem) -> bool {
 }
 
 fn is_filtered_input_item(item: &InputItem) -> bool {
-    let InputItem::Json { value, .. } = item else {
+    let InputItem::Json { value } = item else {
         return false;
     };
     matches!(

@@ -1,14 +1,11 @@
 use crate::errors::Result;
 use crate::exceptions::UserError;
-use crate::items::{InputItem, InputItemProvenance, RunItem};
+use crate::items::{InputItem, RunItem};
 use crate::memory::resolve_session_limit;
 use crate::run_config::RunConfig;
 use crate::session::Session;
 use crate::tracing::{custom_span, get_trace_provider};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-static NEXT_INPUT_ITEM_PROVENANCE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) async fn prepare_input_with_session(
     input: &[InputItem],
@@ -35,16 +32,8 @@ pub(crate) async fn prepare_input_with_session(
     let original_input = input.to_vec();
     let (mut prepared, mut session_input_items) =
         if let Some(callback) = &config.session_input_callback {
-            let history_for_callback = history
-                .clone()
-                .into_iter()
-                .map(assign_input_item_provenance)
-                .collect::<Vec<_>>();
-            let new_items_for_callback = original_input
-                .clone()
-                .into_iter()
-                .map(assign_input_item_provenance)
-                .collect::<Vec<_>>();
+            let history_for_callback = history.clone();
+            let new_items_for_callback = original_input.clone();
             let mut history_refs = build_reference_map(&history_for_callback);
             let mut new_refs = build_reference_map(&new_items_for_callback);
             let mut history_counts = build_frequency_map(&history_for_callback);
@@ -63,14 +52,26 @@ pub(crate) async fn prepare_input_with_session(
                     decrement_count(&mut history_counts, &key);
                     continue;
                 }
-                if history_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut history_counts, &key);
-                    continue;
-                }
-                if new_counts.get(&key).copied().unwrap_or_default() > 0 {
-                    decrement_count(&mut new_counts, &key);
-                    session_input_items.push(item.clone());
-                    continue;
+                if prefers_new_frequency_match(item) {
+                    if new_counts.get(&key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut new_counts, &key);
+                        session_input_items.push(item.clone());
+                        continue;
+                    }
+                    if history_counts.get(&key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut history_counts, &key);
+                        continue;
+                    }
+                } else {
+                    if history_counts.get(&key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut history_counts, &key);
+                        continue;
+                    }
+                    if new_counts.get(&key).copied().unwrap_or_default() > 0 {
+                        decrement_count(&mut new_counts, &key);
+                        session_input_items.push(item.clone());
+                        continue;
+                    }
                 }
 
                 session_input_items.push(item.clone());
@@ -169,12 +170,6 @@ fn consume_reference(refs: &mut HashMap<String, Vec<InputItemIdentity>>, item: &
     true
 }
 
-fn assign_input_item_provenance(item: InputItem) -> InputItem {
-    item.with_provenance(Some(
-        NEXT_INPUT_ITEM_PROVENANCE.fetch_add(1, Ordering::Relaxed) as InputItemProvenance,
-    ))
-}
-
 fn build_frequency_map(items: &[InputItem]) -> HashMap<String, usize> {
     let mut counts = HashMap::new();
     for item in items {
@@ -195,13 +190,49 @@ fn session_item_key(item: &InputItem) -> String {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct InputItemIdentity {
-    provenance: InputItemProvenance,
+enum InputItemIdentity {
+    Text(usize),
+    JsonString(usize),
+    JsonArray(usize),
+    JsonObject { first_key: usize, len: usize },
 }
 
 fn input_item_identity(item: &InputItem) -> Option<InputItemIdentity> {
-    item.provenance()
-        .map(|provenance| InputItemIdentity { provenance })
+    match item {
+        InputItem::Text { text } => Some(InputItemIdentity::Text(text.as_ptr() as usize)),
+        InputItem::Json { value } => json_value_identity(value),
+    }
+}
+
+fn json_value_identity(value: &serde_json::Value) -> Option<InputItemIdentity> {
+    match value {
+        serde_json::Value::String(text) => {
+            Some(InputItemIdentity::JsonString(text.as_ptr() as usize))
+        }
+        serde_json::Value::Array(values) => {
+            Some(InputItemIdentity::JsonArray(values.as_ptr() as usize))
+        }
+        serde_json::Value::Object(map) => {
+            map.iter()
+                .next()
+                .map(|(key, _)| InputItemIdentity::JsonObject {
+                    first_key: key.as_ptr() as usize,
+                    len: map.len(),
+                })
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => None,
+    }
+}
+
+fn prefers_new_frequency_match(item: &InputItem) -> bool {
+    matches!(
+        item,
+        InputItem::Json {
+            value: serde_json::Value::Null
+                | serde_json::Value::Bool(_)
+                | serde_json::Value::Number(_),
+        }
+    )
 }
 
 #[cfg(test)]
@@ -316,7 +347,6 @@ mod tests {
         session
             .add_items(vec![InputItem::Json {
                 value: value.clone(),
-                provenance: None,
             }])
             .await
             .expect("history should be added");
@@ -330,7 +360,6 @@ mod tests {
         let (prepared, _original_input, session_items) = prepare_input_with_session(
             &[InputItem::Json {
                 value: value.clone(),
-                provenance: None,
             }],
             &config,
             &session,
@@ -342,16 +371,9 @@ mod tests {
             prepared,
             vec![InputItem::Json {
                 value: value.clone(),
-                provenance: None,
             }]
         );
-        assert_eq!(
-            session_items,
-            vec![InputItem::Json {
-                value,
-                provenance: None,
-            }]
-        );
+        assert_eq!(session_items, vec![InputItem::Json { value }]);
     }
 
     #[tokio::test]

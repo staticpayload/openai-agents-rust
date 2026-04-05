@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use openai_agents::{
-    Agent, InputItem, Model, ModelProvider, ModelRequest, ModelResponse,
+    Agent, InputItem, MemorySession, Model, ModelProvider, ModelRequest, ModelResponse,
     OpenAIConversationsSession, OpenAIResponsesCompactionMode, OpenAIResponsesCompactionSession,
     OutputItem, RunConfig, RunOptions, Runner, Session,
 };
@@ -112,6 +112,79 @@ async fn runner_uses_and_persists_openai_conversation_session_state() {
 }
 
 #[tokio::test]
+async fn session_input_callback_preserves_duplicate_json_provenance_without_public_fields() {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingProvider {
+        model: Arc::new(CapturingModel {
+            requests: requests.clone(),
+            response_id: "resp-session".to_owned(),
+        }),
+    };
+    let session = MemorySession::new("session");
+    session
+        .add_items(vec![InputItem::Json {
+            value: serde_json::json!({
+                "kind": "duplicate",
+                "value": 42,
+            }),
+        }])
+        .await
+        .expect("seed items should be stored");
+
+    let runner = Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .with_config(RunConfig {
+            session_input_callback: Some(Arc::new(|_history, mut new_items| {
+                Box::pin(async move { Ok(vec![new_items.remove(0)]) })
+            })),
+            ..RunConfig::default()
+        });
+    let agent = Agent::builder("assistant").build();
+
+    runner
+        .run_items_with_session(
+            &agent,
+            vec![InputItem::Json {
+                value: serde_json::json!({
+                    "kind": "duplicate",
+                    "value": 42,
+                }),
+            }],
+            &session,
+        )
+        .await
+        .expect("run should succeed");
+
+    let items = session
+        .get_items()
+        .await
+        .expect("session items should load");
+    assert_eq!(items.len(), 3);
+    assert!(matches!(
+        &items[0],
+        InputItem::Json { value }
+            if value == &serde_json::json!({
+                "kind": "duplicate",
+                "value": 42,
+            })
+    ));
+    assert!(matches!(
+        &items[1],
+        InputItem::Json { value }
+            if value == &serde_json::json!({
+                "kind": "duplicate",
+                "value": 42,
+            })
+    ));
+    assert_eq!(items[2].as_text(), Some(""));
+
+    let captured = requests.lock().await.clone();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].0, None);
+    assert_eq!(captured[0].1, None);
+}
+
+#[tokio::test]
 async fn runner_triggers_auto_compaction_for_compaction_sessions() {
     let provider = CapturingProvider {
         model: Arc::new(CapturingModel {
@@ -128,7 +201,6 @@ async fn runner_triggers_auto_compaction_for_compaction_sessions() {
                 "type": "tool_call_output",
                 "call_id": "call-1",
             }),
-            provenance: None,
         }])
         .await
         .expect("seed items should be stored");
@@ -147,7 +219,7 @@ async fn runner_triggers_auto_compaction_for_compaction_sessions() {
         .expect("session items should load");
     assert!(items.iter().any(|item| matches!(
         item,
-        openai_agents::InputItem::Json { value, .. }
+        openai_agents::InputItem::Json { value }
             if value.get("type").and_then(serde_json::Value::as_str) == Some("compaction")
     )));
 }

@@ -420,7 +420,7 @@ fn json_value_to_string(value: &Value) -> String {
 
 fn openai_response_input_item(item: &InputItem) -> Value {
     match item {
-        InputItem::Text { text, .. } => json!({
+        InputItem::Text { text } => json!({
             "role": "user",
             "content": [
                 {
@@ -429,7 +429,7 @@ fn openai_response_input_item(item: &InputItem) -> Value {
                 }
             ]
         }),
-        InputItem::Json { value, .. } => openai_response_json_item(value),
+        InputItem::Json { value } => openai_response_json_item(value),
     }
 }
 
@@ -504,11 +504,11 @@ fn openai_response_json_item(value: &Value) -> Value {
 
 fn openai_chat_messages(item: &InputItem) -> Vec<Value> {
     match item {
-        InputItem::Text { text, .. } => vec![json!({
+        InputItem::Text { text } => vec![json!({
             "role": "user",
             "content": text,
         })],
-        InputItem::Json { value, .. } => openai_chat_json_messages(value),
+        InputItem::Json { value } => openai_chat_json_messages(value),
     }
 }
 
@@ -882,7 +882,6 @@ mod tests {
                         "call_id": "call-1",
                         "arguments": {"query": "rust"},
                     }),
-                    provenance: None,
                 },
             ],
             tools: vec![
@@ -927,7 +926,6 @@ mod tests {
                         "text": "found it"
                     }
                 }),
-                provenance: None,
             }],
             tools: Vec::new(),
             trace_id: None,

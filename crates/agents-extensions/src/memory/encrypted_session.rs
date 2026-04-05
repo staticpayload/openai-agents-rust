@@ -110,21 +110,17 @@ where
         Ok(InputItem::Json {
             value: serde_json::to_value(envelope)
                 .map_err(|error| AgentsError::message(error.to_string()))?,
-            provenance: None,
         })
     }
 
     fn try_decrypt_item(&self, item: InputItem) -> Result<Option<InputItem>> {
-        let InputItem::Json { value, .. } = item else {
+        let InputItem::Json { value } = item else {
             return Ok(Some(item));
         };
         let envelope: EncryptedEnvelope = match serde_json::from_value(value.clone()) {
             Ok(envelope) => envelope,
             Err(_) => {
-                return Ok(Some(InputItem::Json {
-                    value,
-                    provenance: None,
-                }));
+                return Ok(Some(InputItem::Json { value }));
             }
         };
         if let Some(ttl_seconds) = self.ttl_seconds {

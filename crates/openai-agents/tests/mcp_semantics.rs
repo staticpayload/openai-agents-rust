@@ -127,7 +127,7 @@ impl Model for FakeMcpModel {
             .input
             .iter()
             .filter_map(|item| match item {
-                openai_agents::InputItem::Json { value, .. } => Some(value),
+                openai_agents::InputItem::Json { value } => Some(value),
                 openai_agents::InputItem::Text { .. } => None,
             })
             .find_map(|value| {

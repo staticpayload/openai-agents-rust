@@ -8,11 +8,11 @@ impl ChatCmplHelpers {
         items
             .iter()
             .flat_map(|item| match item {
-                InputItem::Text { text, .. } => vec![json!({
+                InputItem::Text { text } => vec![json!({
                     "role": "user",
                     "content": text,
                 })],
-                InputItem::Json { value, .. } => input_json_to_messages(value),
+                InputItem::Json { value } => input_json_to_messages(value),
             })
             .collect()
     }
@@ -81,7 +81,6 @@ mod tests {
             InputItem::from("hello"),
             InputItem::Json {
                 value: json!({"type":"tool_call","tool_name":"search","call_id":"call-1","arguments":{"q":"rust"}}),
-                provenance: None,
             },
         ]);
         let tools = ChatCmplHelpers::tools_to_payload(&[ToolDefinition::new("search", "Search")]);

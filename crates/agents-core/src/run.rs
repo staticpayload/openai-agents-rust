@@ -1663,7 +1663,7 @@ mod tests {
                 .input
                 .iter()
                 .filter_map(|item| match item {
-                    InputItem::Json { value, .. } => Some(value),
+                    InputItem::Json { value } => Some(value),
                     InputItem::Text { .. } => None,
                 })
                 .find_map(|value| {
@@ -2634,7 +2634,7 @@ mod tests {
             .first()
             .expect("nested history should exist");
         let nested_content = match nested_history {
-            InputItem::Json { value, .. } => value
+            InputItem::Json { value } => value
                 .get("content")
                 .and_then(Value::as_str)
                 .unwrap_or_default()

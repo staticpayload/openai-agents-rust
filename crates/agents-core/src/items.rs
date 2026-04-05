@@ -4,25 +4,12 @@ use serde_json::{Value, json};
 
 pub type TResponseInputItem = InputItem;
 
-#[doc(hidden)]
-pub type InputItemProvenance = u64;
-
 /// Input items passed into a run.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputItem {
-    Text {
-        text: String,
-        #[serde(skip, default)]
-        #[schemars(skip)]
-        provenance: Option<InputItemProvenance>,
-    },
-    Json {
-        value: Value,
-        #[serde(skip, default)]
-        #[schemars(skip)]
-        provenance: Option<InputItemProvenance>,
-    },
+    Text { text: String },
+    Json { value: Value },
 }
 
 impl PartialEq for InputItem {
@@ -38,29 +25,9 @@ impl PartialEq for InputItem {
 impl InputItem {
     pub fn as_text(&self) -> Option<&str> {
         match self {
-            Self::Text { text, .. } => Some(text),
+            Self::Text { text } => Some(text),
             Self::Json { .. } => None,
         }
-    }
-
-    pub(crate) fn provenance(&self) -> Option<InputItemProvenance> {
-        match self {
-            Self::Text { provenance, .. } | Self::Json { provenance, .. } => *provenance,
-        }
-    }
-
-    pub(crate) fn with_provenance(mut self, provenance: Option<InputItemProvenance>) -> Self {
-        match &mut self {
-            Self::Text {
-                provenance: item_provenance,
-                ..
-            }
-            | Self::Json {
-                provenance: item_provenance,
-                ..
-            } => *item_provenance = provenance,
-        }
-        self
     }
 }
 
@@ -68,17 +35,13 @@ impl From<&str> for InputItem {
     fn from(value: &str) -> Self {
         Self::Text {
             text: value.to_owned(),
-            provenance: None,
         }
     }
 }
 
 impl From<String> for InputItem {
     fn from(value: String) -> Self {
-        Self::Text {
-            text: value,
-            provenance: None,
-        }
+        Self::Text { text: value }
     }
 }
 
@@ -224,20 +187,15 @@ impl RunItem {
     pub fn to_input_item(&self) -> Option<InputItem> {
         match self {
             Self::MessageOutput { content } => match content {
-                OutputItem::Text { text } => Some(InputItem::Text {
-                    text: text.clone(),
-                    provenance: None,
-                }),
+                OutputItem::Text { text } => Some(InputItem::Text { text: text.clone() }),
                 OutputItem::Json { value } => Some(InputItem::Json {
                     value: value.clone(),
-                    provenance: None,
                 }),
                 OutputItem::Reasoning { text } => Some(InputItem::Json {
                     value: json!({
                         "type": "reasoning",
                         "text": text,
                     }),
-                    provenance: None,
                 }),
                 OutputItem::ToolCall {
                     call_id,
@@ -252,14 +210,12 @@ impl RunItem {
                         "arguments": arguments,
                         "namespace": namespace,
                     }),
-                    provenance: None,
                 }),
                 OutputItem::Handoff { target_agent } => Some(InputItem::Json {
                     value: json!({
                         "type": "handoff_call",
                         "target_agent": target_agent,
                     }),
-                    provenance: None,
                 }),
             },
             Self::ToolCall {
@@ -275,7 +231,6 @@ impl RunItem {
                     "call_id": call_id,
                     "namespace": namespace,
                 }),
-                provenance: None,
             }),
             Self::ToolCallOutput {
                 tool_name,
@@ -290,28 +245,24 @@ impl RunItem {
                     "call_id": call_id,
                     "namespace": namespace,
                 }),
-                provenance: None,
             }),
             Self::HandoffCall { target_agent } => Some(InputItem::Json {
                 value: json!({
                     "type": "handoff_call",
                     "target_agent": target_agent,
                 }),
-                provenance: None,
             }),
             Self::HandoffOutput { source_agent } => Some(InputItem::Json {
                 value: json!({
                     "type": "handoff_output",
                     "source_agent": source_agent,
                 }),
-                provenance: None,
             }),
             Self::Reasoning { text } => Some(InputItem::Json {
                 value: json!({
                     "type": "reasoning",
                     "text": text,
                 }),
-                provenance: None,
             }),
         }
     }
@@ -348,8 +299,7 @@ mod tests {
                     },
                     "call_id": "call-1",
                     "namespace": "knowledge"
-                }),
-                provenance: None
+                })
             }
         );
     }

@@ -64,13 +64,9 @@ impl ModelResponse {
         self.output
             .iter()
             .map(|item| match item {
-                OutputItem::Text { text } => InputItem::Text {
-                    text: text.clone(),
-                    provenance: None,
-                },
+                OutputItem::Text { text } => InputItem::Text { text: text.clone() },
                 OutputItem::Json { value } => InputItem::Json {
                     value: value.clone(),
-                    provenance: None,
                 },
                 OutputItem::ToolCall {
                     call_id,
@@ -85,21 +81,18 @@ impl ModelResponse {
                         "arguments": arguments,
                         "namespace": namespace,
                     }),
-                    provenance: None,
                 },
                 OutputItem::Handoff { target_agent } => InputItem::Json {
                     value: serde_json::json!({
                         "type": "handoff_call",
                         "target_agent": target_agent,
                     }),
-                    provenance: None,
                 },
                 OutputItem::Reasoning { text } => InputItem::Json {
                     value: serde_json::json!({
                         "type": "reasoning",
                         "text": text,
                     }),
-                    provenance: None,
                 },
             })
             .collect()

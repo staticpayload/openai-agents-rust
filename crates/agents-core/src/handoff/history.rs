@@ -119,14 +119,13 @@ fn build_summary_message(transcript: &[InputItem]) -> InputItem {
             "role": "assistant",
             "content": content,
         }),
-        provenance: None,
     }
 }
 
 fn format_transcript_item(item: &InputItem) -> String {
     match item {
-        InputItem::Text { text, .. } => format!("user: {text}"),
-        InputItem::Json { value, .. } => {
+        InputItem::Text { text } => format!("user: {text}"),
+        InputItem::Json { value } => {
             if let Some(role) = value.get("role").and_then(serde_json::Value::as_str) {
                 let content = value
                     .get("content")
@@ -165,7 +164,7 @@ fn flatten_nested_history_messages(items: &[InputItem]) -> Vec<InputItem> {
 }
 
 fn extract_nested_history_transcript(item: &InputItem) -> Option<Vec<InputItem>> {
-    let InputItem::Json { value, .. } = item else {
+    let InputItem::Json { value } = item else {
         return None;
     };
     let content = value.get("content")?.as_str()?;
@@ -200,7 +199,6 @@ fn parse_summary_line(line: &str) -> Option<InputItem> {
             "role": role_part.trim(),
             "content": remainder.trim(),
         }),
-        provenance: None,
     })
 }
 
@@ -221,7 +219,6 @@ mod tests {
         let input_data = crate::handoff::HandoffInputData {
             input_history: vec![InputItem::Json {
                 value: serde_json::json!({"role":"user","content":"hello"}),
-                provenance: None,
             }],
             pre_handoff_items: vec![],
             new_items: vec![RunItem::MessageOutput {

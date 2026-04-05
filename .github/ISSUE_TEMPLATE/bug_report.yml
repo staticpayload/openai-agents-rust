@@ -1,0 +1,35 @@
+name: Bug report
+description: Report a runtime or docs bug
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps, sample code, or input needed to reproduce the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: openai-agents-rs 0.1.2
+  - type: input
+    id: rust
+    attributes:
+      label: Rust version
+      placeholder: rustc 1.85.0

@@ -11,10 +11,10 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 rust-version = "1.85"
 version = "0.1.2"
-authors = ["OpenAI <support@openai.com>"]
+authors = ["Chaitanya Mishra <233810408+staticpayload@users.noreply.github.com>"]
 
 [workspace.dependencies]
 anyhow = "1.0.100"

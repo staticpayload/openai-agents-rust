@@ -8,7 +8,8 @@ authors.workspace = true
 description = "Optional transports, adapters, memory backends, and integrations for openai-agents-rust."
 repository = "https://github.com/scalarian/openai-agents-rust"
 homepage = "https://github.com/scalarian/openai-agents-rust"
-readme = "../../README.md"
+documentation = "https://docs.rs/openai-agents-extensions-rs"
+readme = "README.md"
 keywords = ["agents", "openai", "extensions", "realtime", "integrations"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 

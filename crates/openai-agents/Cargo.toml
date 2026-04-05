@@ -8,7 +8,8 @@ authors.workspace = true
 description = "Rust-native agents runtime with OpenAI, MCP, realtime, voice, and extensions."
 repository = "https://github.com/scalarian/openai-agents-rust"
 homepage = "https://github.com/scalarian/openai-agents-rust"
-readme = "../../README.md"
+documentation = "https://docs.rs/openai-agents-rs"
+readme = "README.md"
 keywords = ["agents", "openai", "llm", "realtime", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 

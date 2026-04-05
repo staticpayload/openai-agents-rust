@@ -62,6 +62,19 @@ The docs live in `docs/` and are written as product docs rather than internal no
 
 Keep one canonical page per topic. Prefer updating an existing page over creating near-duplicates.
 
+## Repo Health Files
+
+This repository intentionally keeps the usual open-source project entrypoints in the root and `.github/`:
+
+- `CODE_OF_CONDUCT.md`
+- `SECURITY.md`
+- `SUPPORT.md`
+- `CHANGELOG.md`
+- `.github/ISSUE_TEMPLATE/`
+- `.github/pull_request_template.md`
+- `.github/CODEOWNERS`
+- `.github/workflows/ci.yml`
+
 ## Style
 
 - Keep modules focused.

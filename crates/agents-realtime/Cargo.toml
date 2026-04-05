@@ -8,6 +8,7 @@ authors.workspace = true
 description = "Realtime runtime, sessions, and event models for openai-agents-rust."
 repository = "https://github.com/scalarian/openai-agents-rust"
 homepage = "https://github.com/scalarian/openai-agents-rust"
+documentation = "https://docs.rs/openai-agents-realtime-rs"
 readme = "README.md"
 keywords = ["agents", "openai", "realtime", "audio", "streaming"]
 categories = ["asynchronous", "api-bindings", "development-tools"]

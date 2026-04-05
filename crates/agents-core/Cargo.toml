@@ -8,7 +8,8 @@ authors.workspace = true
 description = "Core runtime primitives for openai-agents-rust."
 repository = "https://github.com/scalarian/openai-agents-rust"
 homepage = "https://github.com/scalarian/openai-agents-rust"
-readme = "../../README.md"
+documentation = "https://docs.rs/openai-agents-core-rs"
+readme = "README.md"
 keywords = ["agents", "openai", "llm", "runtime", "mcp"]
 categories = ["asynchronous", "api-bindings", "development-tools"]
 

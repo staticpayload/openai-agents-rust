@@ -1,10 +1,43 @@
 # openai-agents-rust
 
-Rust-native agents runtime with a single ergonomic facade, async-first execution, OpenAI integrations, MCP, realtime sessions, voice workflows, and extension hooks.
+![CI](https://github.com/scalarian/openai-agents-rust/actions/workflows/ci.yml/badge.svg)
+[![License](https://img.shields.io/badge/license-Apache--2.0-4B5563.svg)](LICENSE)
 
-![Runtime overview](docs/assets/runtime-overview.svg)
+Rust-native agents runtime for OpenAI-style agent systems: typed agents, tools, sessions, MCP, realtime, voice, and extensions.
 
-This repository is for teams that want to build agent systems in Rust without wrapping another SDK and without giving up typed runtime building blocks.
+This repository is for teams that want native Rust building blocks for agent workflows without wrapping another SDK and without giving up typed runtime control.
+
+## Why This Project
+
+- async-first runtime with a small facade and lower-level primitives
+- one-shot, session-backed, and streamed execution paths
+- OpenAI Responses and Chat Completions integrations
+- MCP tools and resources
+- realtime sessions and voice workflows
+- extensions for transports, adapters, and optional backends
+
+## Quick Start
+
+```toml
+[dependencies]
+openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+```rust
+use openai_agents::{run, Agent};
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents::AgentsError> {
+    let agent = Agent::builder("assistant")
+        .instructions("Be concise, practical, and structured.")
+        .build();
+
+    let result = run(&agent, "Give me three production readiness checks.").await?;
+    println!("{}", result.final_output.unwrap_or_default());
+    Ok(())
+}
+```
 
 ## Start Here
 
@@ -27,33 +60,6 @@ This repository is for teams that want to build agent systems in Rust without wr
 - voice workflows and STT -> workflow -> TTS pipelines
 - optional integrations through the extensions namespace
 
-## Install
-
-```toml
-[dependencies]
-openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-## Smallest Useful Example
-
-```rust
-use openai_agents::{run, Agent};
-
-#[tokio::main]
-async fn main() -> Result<(), openai_agents::AgentsError> {
-    let agent = Agent::builder("assistant")
-        .instructions("Be concise, practical, and structured.")
-        .build();
-
-    let result = run(&agent, "Give me three production readiness checks.").await?;
-    println!("{}", result.final_output.unwrap_or_default());
-    Ok(())
-}
-```
-
-For a fuller walkthrough, open [docs/quickstart.md](docs/quickstart.md).
-
 ## Choose A Path
 
 | I want to... | Read this |
@@ -67,9 +73,19 @@ For a fuller walkthrough, open [docs/quickstart.md](docs/quickstart.md).
 | build realtime or voice flows | [docs/realtime/README.md](docs/realtime/README.md), [docs/voice/README.md](docs/voice/README.md) |
 | debug traces and runtime behavior | [docs/tracing.md](docs/tracing.md) |
 
-## Public Surface
+## Package And Import Names
 
 The top-level published package is `openai-agents-rs`, and the Rust crate name remains `openai_agents`.
+
+```toml
+openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
+```
+
+```rust
+use openai_agents::{Agent, Runner};
+```
+
+## Public Surface
 
 - runtime: `Agent`, `Runner`, `RunConfig`, `RunOptions`, `RunResult`, `RunResultStreaming`
 - OpenAI: `OpenAIProvider`, `OpenAIResponsesModel`, `OpenAIChatCompletionsModel`
@@ -81,26 +97,28 @@ The top-level published package is `openai-agents-rs`, and the Rust crate name r
 
 The curated API map lives in [docs/ref/README.md](docs/ref/README.md).
 
+## Crate Map
+
+| Crate | Responsibility |
+| --- | --- |
+| `openai-agents-rs` | public facade and normal application entry point |
+| `openai-agents-core-rs` | agents, runners, tools, sessions, handoffs, tracing |
+| `openai-agents-openai-rs` | OpenAI provider, sessions, hosted tools |
+| `openai-agents-realtime-rs` | realtime runner, session, event, and audio flow |
+| `openai-agents-voice-rs` | voice workflow, STT/TTS, streamed audio results |
+| `openai-agents-extensions-rs` | optional transports, adapters, backends, and extras |
+
 ## Examples
 
 Runnable examples live in `crates/openai-agents/examples`.
 
 - [basic_run.rs](crates/openai-agents/examples/basic_run.rs)
 - [memory_session.rs](crates/openai-agents/examples/memory_session.rs)
+- [streamed_run.rs](crates/openai-agents/examples/streamed_run.rs)
 - [realtime_session.rs](crates/openai-agents/examples/realtime_session.rs)
+- [voice_pipeline.rs](crates/openai-agents/examples/voice_pipeline.rs)
 
 The full example index is in [docs/examples.md](docs/examples.md).
-
-## Workspace Layout
-
-- `crates/openai-agents`: public facade crate
-- `crates/agents-core`: shared runtime primitives
-- `crates/agents-openai`: OpenAI-specific implementation
-- `crates/agents-realtime`: realtime runtime
-- `crates/agents-voice`: voice runtime
-- `crates/agents-extensions`: optional and experimental integrations
-- `docs/`: product docs, guides, and curated reference
-- `examples/`: example landing page
 
 ## Contributing
 
@@ -120,10 +138,20 @@ docs/scripts/check_links.sh
 docs/scripts/generate_llms_exports.sh
 ```
 
+## Release Hygiene
+
+- CI lives in `.github/workflows/ci.yml`
+- issue and PR templates live in `.github/`
+- release notes live in [CHANGELOG.md](CHANGELOG.md)
+- security and support guidance live in [SECURITY.md](SECURITY.md) and [SUPPORT.md](SUPPORT.md)
+
 ## Status
 
 The project is pre-1.0. The runtime is already broad, but APIs may still tighten as the library gets simpler and more stable.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
+
+> [!WARNING]
+> This project is not an official OpenAI product. It is not affiliated with, endorsed by, or maintained by OpenAI.

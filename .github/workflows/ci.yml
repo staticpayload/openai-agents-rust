@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Test workspace
+        run: cargo test --workspace
+
+      - name: Regenerate docs exports
+        run: docs/scripts/generate_llms_exports.sh
+
+      - name: Check docs links
+        run: docs/scripts/check_links.sh
+
+      - name: Verify docs exports committed
+        run: git diff --exit-code -- docs/llms.txt docs/llms-full.txt
+
+      - name: Package smoke test
+        run: cargo package --workspace --allow-dirty --no-verify

@@ -19,7 +19,7 @@ pub enum OpenAIResponsesTransport {
     WebSocket,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct OpenAIProvider {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
@@ -28,8 +28,24 @@ pub struct OpenAIProvider {
     pub project: Option<String>,
     pub api: Option<OpenAIApi>,
     pub use_responses: Option<bool>,
-    pub use_responses_websocket: Option<bool>,
+    pub use_responses_websocket: bool,
     websocket_model_cache: Arc<Mutex<HashMap<String, Arc<OpenAIResponsesWsModel>>>>,
+}
+
+impl Default for OpenAIProvider {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            base_url: None,
+            websocket_base_url: None,
+            organization: None,
+            project: None,
+            api: None,
+            use_responses: None,
+            use_responses_websocket: get_use_responses_websocket_by_default() == Some(true),
+            websocket_model_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
 }
 
 impl OpenAIProvider {
@@ -73,7 +89,7 @@ impl OpenAIProvider {
     }
 
     pub fn with_use_responses_websocket(mut self, use_responses_websocket: bool) -> Self {
-        self.use_responses_websocket = Some(use_responses_websocket);
+        self.use_responses_websocket = use_responses_websocket;
         self
     }
 
@@ -111,13 +127,7 @@ impl OpenAIProvider {
     }
 
     pub fn responses_transport(&self) -> OpenAIResponsesTransport {
-        if let Some(use_responses_websocket) = self.use_responses_websocket {
-            if use_responses_websocket {
-                OpenAIResponsesTransport::WebSocket
-            } else {
-                OpenAIResponsesTransport::Http
-            }
-        } else if get_use_responses_websocket_by_default() == Some(true) {
+        if self.use_responses_websocket {
             OpenAIResponsesTransport::WebSocket
         } else {
             OpenAIResponsesTransport::Http
@@ -260,6 +270,20 @@ mod tests {
         assert_eq!(
             websocket_provider.responses_transport(),
             OpenAIResponsesTransport::WebSocket
+        );
+    }
+
+    #[test]
+    fn public_websocket_flag_remains_bool_and_preserves_explicit_false_override() {
+        set_use_responses_websocket_by_default(true);
+
+        let mut provider = OpenAIProvider::new().with_use_responses(true);
+        provider.use_responses_websocket = false;
+
+        assert!(!provider.use_responses_websocket);
+        assert_eq!(
+            provider.responses_transport(),
+            OpenAIResponsesTransport::Http
         );
     }
 

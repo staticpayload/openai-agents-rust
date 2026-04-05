@@ -1,0 +1,28 @@
+{
+  "featureId": "fix-openai-delta-tracking-drop-reorder-identity",
+  "reviewedAt": "2026-04-05T15:52:14Z",
+  "commitId": "635fda23503a03fbf3bb35cece926e5f1d7907b7",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Reviewing the original failed diff and this rerun fix shows the new commit improves the old fingerprint-only remapping, but it still does not fully resolve the original scrutiny failure. The tracker now assigns ephemeral source IDs to prepared items, yet `register_filtered_input_sources()` can only reuse them when the filtered item still carries the same heap identity as the prepared item or the same serialized fingerprint. If a filter drops or reorders siblings and rewrites another item by replacing it with a fresh `InputItem`, the function still falls through to `unwrap_or(0)` and guesses the first remaining source, so sent-state can drift and the actually delivered source can replay later.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/oai_conversation.rs",
+        "line": 160,
+        "severity": "blocking",
+        "description": "`register_filtered_input_sources()` still guesses source identity when a filtered rewrite is expressed as a fresh replacement instead of an in-place mutation. The new identity path relies on `input_item_identity()` (`crates/agents-core/src/internal/oai_conversation.rs:364-382`), which is derived from heap addresses of the current text/JSON storage; a replaced filtered item therefore has neither the original identity nor the original fingerprint, so the code falls back to `.unwrap_or(0)` (`crates/agents-core/src/internal/oai_conversation.rs:160-175`) and attributes it to the first remaining prepared source. The public filter API allows exactly this replacement style (`crates/agents-core/src/run.rs:2872-2876`), and the added regression only covers an in-place JSON mutation (`crates/agents-core/src/internal/oai_conversation.rs:453-486`), not a replacement rewrite combined with drop/reorder. In that mixed case the wrong source can still be marked sent and the real delivered source can replay on a later server-managed turn, so the original scrutiny failure remains unresolved. The JS reference avoids this by carrying explicit per-filtered-item `sourceItems` mappings instead of guessing from filtered order (`reference/openai-agents-js/packages/agents-core/src/runner/conversation.ts:38-49,135-169,370-431`)."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The mission docs capture the invariant that server-managed conversation tracking must preserve source attribution across `call_model_input_filter` rewrites, but they do not record the concrete Rust/JS API mismatch that makes this bug family recur: Rust `ModelInputData` has no `sourceItems`/`filterApplied` provenance channel, so workers keep trying tracker-side heuristics instead of carrying explicit per-filtered-item source mappings.",
+      "evidence": "`.factory/library/architecture.md` documents the attribution invariant, but `crates/agents-core/src/run_config.rs:23-29` only exposes `{ input, instructions }` while the JS reference returns `sourceItems` and `filterApplied` for filtered input (`reference/openai-agents-js/packages/agents-core/src/runner/conversation.ts:38-49,135-169`)."
+    }
+  ],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/core-runtime-parity/scrutiny/reviews/fix-openai-delta-tracking-under-filtered-rewrites.json",
+  "summary": "Fail. The rerun fixes the narrow in-place mutation case, but it still guesses source identity when a dropped/reordered filtered rewrite is emitted as a fresh replacement item, so sent-state can still drift and replay an already-delivered delta later."
+}

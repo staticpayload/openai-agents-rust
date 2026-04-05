@@ -1,6 +1,6 @@
 {
   "milestone": "core-runtime-parity",
-  "round": 2,
+  "round": 3,
   "status": "fail",
   "validatorsRun": {
     "test": {
@@ -20,39 +20,28 @@
     }
   },
   "reviewsSummary": {
-    "total": 5,
-    "passed": 2,
-    "failed": 3,
+    "total": 4,
+    "passed": 3,
+    "failed": 1,
     "failedFeatures": [
-      "fix-runner-filtered-replay-and-structured-max-turn-coverage",
-      "fix-openai-provider-explicit-override-precedence",
-      "fix-openai-delta-tracking-under-filtered-rewrites"
+      "fix-openai-delta-tracking-drop-reorder-identity"
     ]
   },
   "blockingIssues": [
     {
-      "featureId": "fix-runner-filtered-replay-and-structured-max-turn-coverage",
+      "featureId": "fix-openai-delta-tracking-drop-reorder-identity",
       "severity": "blocking",
-      "description": "`compose_replay_input_items` now deduplicates overlap by raw `InputItem` equality, so preserve-all replay / durable resume can drop legitimate repeated generated items when base input and generated output share the same text or JSON value."
-    },
-    {
-      "featureId": "fix-runner-filtered-replay-and-structured-max-turn-coverage",
-      "severity": "blocking",
-      "description": "The added max-turn regression still exercises structured tool outputs instead of a true structured-output agent run using `output_type` / output schema, so the required structured-output `max_turns` path remains uncovered."
-    },
-    {
-      "featureId": "fix-openai-provider-explicit-override-precedence",
-      "severity": "blocking",
-      "description": "The tri-state transport fix changes the public `OpenAIProvider.use_responses_websocket` field from `bool` to `Option<bool>`, introducing a source-breaking API change on a facade-reexported type."
-    },
-    {
-      "featureId": "fix-openai-delta-tracking-under-filtered-rewrites",
-      "severity": "blocking",
-      "description": "`register_filtered_input_sources()` still guesses source identity when filtered output drops or reorders prepared items, so sent-state can drift and already-delivered server-conversation deltas can replay on later turns."
+      "description": "`register_filtered_input_sources()` still guesses source identity when a filtered rewrite is emitted as a fresh replacement item after sibling drops/reorders, so sent-state can still drift and replay an already-delivered server-conversation delta later."
     }
   ],
-  "appliedUpdates": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Added `.factory/library/openai-filtered-input-provenance.md` documenting the Rust/JS filtered-input provenance mismatch (`ModelInputData` lacks JS-style `sourceItems`/`filterApplied`) behind recurring server-conversation sent-state bugs.",
+      "sourceFeature": "fix-openai-delta-tracking-drop-reorder-identity"
+    }
+  ],
   "suggestedGuidanceUpdates": [],
   "rejectedObservations": [],
-  "previousRound": ".factory/validation/core-runtime-parity/scrutiny/synthesis.round1.json"
+  "previousRound": ".factory/validation/core-runtime-parity/scrutiny/synthesis.round2.json"
 }

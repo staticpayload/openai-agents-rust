@@ -1,0 +1,15 @@
+{
+  "featureId": "fix-structured-output-max-turn-runtime-coverage",
+  "reviewedAt": "2026-04-05T15:50:56Z",
+  "commitId": "d0e7ec8b86f3630ed8b7697f0c2710f33a1eafb9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The fix directly closes the prior scrutiny gap. Unlike the original failed feature, the updated core regression now configures a real structured-output agent via `output_schema`, proves `max_turns` exhaustion in both non-streamed and streamed runs, and asserts that the runtime carries the structured output schema on every model request. The companion facade regression exercises the same behavior through the public `openai-agents` runner surface.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/core-runtime-parity/scrutiny/reviews/fix-runner-filtered-replay-and-structured-max-turn-coverage.json",
+  "summary": "Pass: reviewed the fix feature transcript and both diffs; the new tests replace the old structured-tool-output proxy with true structured-output runtime coverage and adequately resolve the prior scrutiny failure. No remaining issues found in scope."
+}

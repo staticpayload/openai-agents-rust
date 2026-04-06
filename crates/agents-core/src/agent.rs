@@ -514,6 +514,7 @@ impl Agent {
                 }
                 let resolved_max_turns = nested_run_config.max_turns;
                 let mut nested_context = tool_context.run_context.clone();
+                nested_context.approvals.clear();
                 if should_capture_tool_input {
                     nested_context.tool_input = Some(params_value.clone());
                 } else {
@@ -757,7 +758,7 @@ mod tests {
     use crate::agent_tool_state::{
         drop_agent_tool_run_result, peek_agent_tool_run_result, set_agent_tool_state_scope,
     };
-    use crate::run_context::RunContext;
+    use crate::run_context::{ApprovalRecord, RunContext};
     use crate::tool::Tool;
     use crate::tool::function_tool;
 
@@ -829,6 +830,13 @@ mod tests {
             .expect("agent tool should build");
         let mut run_context = RunContextWrapper::new(RunContext::default());
         set_agent_tool_state_scope(&mut run_context, Some("scope-a".to_owned()));
+        run_context.approvals.insert(
+            "call-123".to_owned(),
+            ApprovalRecord {
+                approved: true,
+                reason: Some("approved in parent".to_owned()),
+            },
+        );
         run_context.tool_input = Some(json!({"stale": true}));
 
         let output = tool
@@ -853,6 +861,7 @@ mod tests {
             stored.context_snapshot.agent_tool_state_scope.as_deref(),
             Some("scope-a")
         );
+        assert!(stored.context_snapshot.approvals.is_empty());
         assert!(stored.context_snapshot.tool_input.is_none());
 
         drop_agent_tool_run_result("call-123", Some("scope-a".to_owned()));

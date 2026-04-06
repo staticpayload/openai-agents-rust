@@ -210,21 +210,41 @@ impl RunState {
     }
 
     pub fn approve(&mut self, id: impl Into<String>, reason: Option<String>) {
+        self.approve_for_tool(id, None, reason);
+    }
+
+    pub fn approve_for_tool(
+        &mut self,
+        id: impl Into<String>,
+        tool_name: Option<String>,
+        reason: Option<String>,
+    ) {
         self.context_snapshot.approvals.insert(
             id.into(),
             ApprovalRecord {
                 approved: true,
                 reason,
+                tool_name,
             },
         );
     }
 
     pub fn reject(&mut self, id: impl Into<String>, reason: Option<String>) {
+        self.reject_for_tool(id, None, reason);
+    }
+
+    pub fn reject_for_tool(
+        &mut self,
+        id: impl Into<String>,
+        tool_name: Option<String>,
+        reason: Option<String>,
+    ) {
         self.context_snapshot.approvals.insert(
             id.into(),
             ApprovalRecord {
                 approved: false,
                 reason,
+                tool_name,
             },
         );
     }

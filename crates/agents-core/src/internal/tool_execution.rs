@@ -108,6 +108,30 @@ pub(crate) async fn execute_local_function_tools(
                     });
                     break;
                 }
+                Some(approval)
+                    if approval.tool_name.as_deref() != Some(tool_call.name.as_str()) =>
+                {
+                    provider.finish_span(&mut span, true);
+                    if let Some(recorder) = stream_recorder {
+                        recorder
+                            .push_lifecycle(
+                                "tool_approval_required",
+                                Some(serde_json::json!({
+                                    "tool_name": tool_call.name.clone(),
+                                    "call_id": tool_call.id.clone(),
+                                    "namespace": tool_call.namespace.clone(),
+                                })),
+                            )
+                            .await;
+                    }
+                    interruptions.push(RunInterruption {
+                        kind: Some(RunInterruptionKind::ToolApproval),
+                        call_id: Some(tool_call.id.clone()),
+                        tool_name: Some(tool_call.name.clone()),
+                        reason: Some("tool approval required".to_owned()),
+                    });
+                    break;
+                }
                 Some(approval) if !approval.approved => {
                     append_approval_error_output(
                         &mut new_items,

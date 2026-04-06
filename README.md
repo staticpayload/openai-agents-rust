@@ -1,43 +1,10 @@
 # openai-agents-rust
 
-![CI](https://github.com/scalarian/openai-agents-rust/actions/workflows/ci.yml/badge.svg)
-[![License](https://img.shields.io/badge/license-Apache--2.0-4B5563.svg)](LICENSE)
+Rust-native agents runtime with a single ergonomic facade, async-first execution, OpenAI integrations, MCP, realtime sessions, voice workflows, and extension hooks.
 
-Rust-native agents runtime for OpenAI-style agent systems: typed agents, tools, sessions, MCP, realtime, voice, and extensions.
+![Runtime overview](docs/assets/runtime-overview.svg)
 
-This repository is for teams that want native Rust building blocks for agent workflows without wrapping another SDK and without giving up typed runtime control.
-
-## Why This Project
-
-- async-first runtime with a small facade and lower-level primitives
-- one-shot, session-backed, and streamed execution paths
-- OpenAI Responses and Chat Completions integrations
-- MCP tools and resources
-- realtime sessions and voice workflows
-- extensions for transports, adapters, and optional backends
-
-## Quick Start
-
-```toml
-[dependencies]
-openai-agents = { package = "openai-agents-rs", version = "0.1.2" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-```rust
-use openai_agents::{run, Agent};
-
-#[tokio::main]
-async fn main() -> Result<(), openai_agents::AgentsError> {
-    let agent = Agent::builder("assistant")
-        .instructions("Be concise, practical, and structured.")
-        .build();
-
-    let result = run(&agent, "Give me three production readiness checks.").await?;
-    println!("{}", result.final_output.unwrap_or_default());
-    Ok(())
-}
-```
+This repository is for teams that want to build agent systems in Rust without wrapping another SDK and without giving up typed runtime building blocks.
 
 ## Start Here
 
@@ -151,7 +118,4 @@ The project is pre-1.0. The runtime is already broad, but APIs may still tighten
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE).
-
-> [!WARNING]
-> This project is not an official OpenAI product. It is not affiliated with, endorsed by, or maintained by OpenAI.
+MIT. See [LICENSE](LICENSE).

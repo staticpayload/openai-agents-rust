@@ -1080,6 +1080,15 @@ impl Runner {
         let approval = state.approval(&call_id).cloned().ok_or_else(|| UserError {
             message: format!("approval decision for `{call_id}` is missing"),
         })?;
+        if approval.tool_name.as_deref() != Some(tool_call.name.as_str()) {
+            return Err(UserError {
+                message: format!(
+                    "approval decision for `{call_id}` is not bound to tool `{}`",
+                    tool_call.name
+                ),
+            }
+            .into());
+        }
 
         let context = state.restore_context::<crate::run_context::RunContext>()?;
         let tool_outcome = internal_tool_execution::execute_local_function_tools(
@@ -2638,7 +2647,11 @@ mod tests {
             .durable_state()
             .cloned()
             .expect("state should exist");
-        state.approve("call-1", Some("approved".to_owned()));
+        state.approve_for_tool(
+            "call-1",
+            Some("search".to_owned()),
+            Some("approved".to_owned()),
+        );
 
         let resumed = Runner::new()
             .with_model_provider(provider)
@@ -2657,6 +2670,44 @@ mod tests {
                 } if tool_name == "search" && call_id.as_deref() == Some("call-1")
             )
         }));
+    }
+
+    #[tokio::test]
+    async fn runner_rejects_unbound_tool_approval_on_resume() {
+        let provider = Arc::new(FakeProvider {
+            model: Arc::new(FakeModel::default()),
+        });
+        let search_tool = function_tool(
+            "search",
+            "Search documents",
+            |_ctx, args: SearchArgs| async move {
+                Ok::<_, AgentsError>(format!("result:{}", args.query))
+            },
+        )
+        .expect("function tool should build")
+        .with_needs_approval(true);
+        let agent = Agent::builder("assistant")
+            .function_tool(search_tool)
+            .build();
+
+        let initial = Runner::new()
+            .with_model_provider(provider.clone())
+            .run(&agent, "hello")
+            .await
+            .expect("initial run should succeed");
+
+        let mut state = initial
+            .durable_state()
+            .cloned()
+            .expect("state should exist");
+        state.approve("call-1", Some("approved".to_owned()));
+
+        let resumed = Runner::new()
+            .with_model_provider(provider)
+            .resume_with_agent(&state, &agent)
+            .await;
+
+        assert!(matches!(resumed, Err(AgentsError::User(_))));
     }
 
     #[tokio::test]

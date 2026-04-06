@@ -19,6 +19,7 @@ pub struct RunContext {
 pub struct ApprovalRecord {
     pub approved: bool,
     pub reason: Option<String>,
+    pub tool_name: Option<String>,
 }
 
 /// Runtime context wrapper shared across callbacks.

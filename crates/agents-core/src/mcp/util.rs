@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::_mcp_tool_metadata::{resolve_mcp_tool_description_for_model, resolve_mcp_tool_title};
 use crate::agent::Agent;
 use crate::errors::{AgentsError, Result};
+use crate::exceptions::UserError;
 use crate::mcp::server::{MCPServer, MCPTool};
 use crate::run_context::{RunContext, RunContextWrapper};
 use crate::tool::{FunctionTool, ToolDefinition};
@@ -59,6 +60,45 @@ pub fn create_static_tool_filter(
 pub struct MCPUtil;
 
 impl MCPUtil {
+    fn validate_tool_arguments(
+        tool_name: &str,
+        schema: Option<&Value>,
+        args: &Value,
+    ) -> Result<()> {
+        let Some(schema) = schema else {
+            return Ok(());
+        };
+
+        let Value::Object(arguments) = args else {
+            return Err(AgentsError::User(UserError {
+                message: format!(
+                    "tool `{tool_name}` requires object arguments that match its input schema"
+                ),
+            }));
+        };
+
+        let missing_required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|required| !arguments.contains_key(*required))
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+
+        if missing_required.is_empty() {
+            return Ok(());
+        }
+
+        Err(AgentsError::User(UserError {
+            message: format!(
+                "tool `{tool_name}` is missing required argument(s): {}",
+                missing_required.join(", ")
+            ),
+        }))
+    }
+
     pub fn tool_allowed(
         filter: Option<&ToolFilter>,
         context: ToolFilterContext,
@@ -146,6 +186,7 @@ impl MCPUtil {
         let tool_name = tool.name.clone();
         let server_name = server.name().to_owned();
         let needs_approval = tool.requires_approval;
+        let input_schema = tool.input_schema.clone();
         let function_tool = FunctionTool::new(
             definition,
             Arc::new(move |_tool_context, args| {
@@ -154,7 +195,9 @@ impl MCPUtil {
                 let meta_resolver = meta_resolver.clone();
                 let run_context = run_context.clone();
                 let server_name = server_name.clone();
+                let input_schema = input_schema.clone();
                 Box::pin(async move {
+                    Self::validate_tool_arguments(&tool_name, input_schema.as_ref(), &args)?;
                     server.connect().await?;
                     let meta = meta_resolver.and_then(|resolver| {
                         resolver(MCPToolMetaContext {
@@ -278,12 +321,24 @@ impl MCPUtil {
 mod tests {
     use async_trait::async_trait;
     use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use crate::internal::tool_execution::execute_local_function_tools;
+    use crate::items::RunItem;
     use crate::mcp::server::MCPToolAnnotations;
+    use crate::run_config::RunConfig;
     use crate::tool::{Tool, ToolOutput};
+    use crate::tool_context::ToolCall;
 
-    struct FakeServer;
+    #[derive(Default)]
+    struct FakeServerState {
+        tool_calls: AtomicUsize,
+    }
+
+    struct FakeServer {
+        state: Arc<FakeServerState>,
+    }
 
     #[async_trait]
     impl MCPServer for FakeServer {
@@ -326,13 +381,16 @@ mod tests {
             arguments: Value,
             _meta: Option<Value>,
         ) -> Result<ToolOutput> {
+            self.state.tool_calls.fetch_add(1, Ordering::SeqCst);
             Ok(ToolOutput::from(format!("{tool_name}:{arguments}")))
         }
     }
 
     #[tokio::test]
     async fn converts_mcp_tools_into_function_tools() {
-        let server = Arc::new(FakeServer) as Arc<dyn MCPServer>;
+        let server = Arc::new(FakeServer {
+            state: Arc::new(FakeServerState::default()),
+        }) as Arc<dyn MCPServer>;
         let tools = MCPUtil::get_function_tools(
             server,
             None,
@@ -364,7 +422,9 @@ mod tests {
 
     #[tokio::test]
     async fn applies_static_and_callable_tool_filters() {
-        let server = Arc::new(FakeServer) as Arc<dyn MCPServer>;
+        let server = Arc::new(FakeServer {
+            state: Arc::new(FakeServerState::default()),
+        }) as Arc<dyn MCPServer>;
         let run_context = RunContextWrapper::new(RunContext::default());
         let agent = Agent::builder("assistant").build();
 
@@ -396,7 +456,9 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_resolver_and_approval_mapping_flow_into_function_tool() {
-        let server = Arc::new(FakeServer) as Arc<dyn MCPServer>;
+        let server = Arc::new(FakeServer {
+            state: Arc::new(FakeServerState::default()),
+        }) as Arc<dyn MCPServer>;
         let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
         let resolver_captured = captured.clone();
         let resolver: MCPToolMetaResolver = Arc::new(move |context| {
@@ -440,5 +502,145 @@ mod tests {
             captured.lock().expect("capture mutex").as_slice(),
             [("test-server".to_owned(), "lookup".to_owned())]
         );
+    }
+
+    #[tokio::test]
+    async fn mcp_discovered_tools_preserve_required_inputs_and_approval() {
+        let state = Arc::new(FakeServerState::default());
+        let server = Arc::new(FakeServer {
+            state: state.clone(),
+        }) as Arc<dyn MCPServer>;
+        let run_context = RunContextWrapper::new(RunContext::default());
+        let agent = Agent::builder("assistant")
+            .mcp_server(server.clone())
+            .build();
+        let tools = MCPUtil::get_function_tools_connected(
+            server.clone(),
+            None,
+            run_context.clone(),
+            agent.clone(),
+            None,
+        )
+        .await
+        .expect("tools should load");
+
+        assert_eq!(tools.len(), 1);
+        assert!(tools[0].needs_approval);
+        assert_eq!(tools[0].definition.namespace.as_deref(), Some("mcp"));
+        assert_eq!(
+            tools[0]
+                .definition
+                .input_json_schema
+                .as_ref()
+                .and_then(|schema| schema.get("required")),
+            Some(&json!(["q"]))
+        );
+
+        let missing_required = tools[0]
+            .invoke(
+                crate::tool_context::ToolContext::new(
+                    run_context.clone(),
+                    "lookup",
+                    "call-missing",
+                    "{}",
+                ),
+                json!({}),
+            )
+            .await
+            .expect_err("missing required arguments should fail locally");
+        assert!(
+            missing_required
+                .to_string()
+                .contains("missing required argument(s): q")
+        );
+
+        let non_object = tools[0]
+            .invoke(
+                crate::tool_context::ToolContext::new(
+                    run_context.clone(),
+                    "lookup",
+                    "call-non-object",
+                    "\"hello\"",
+                ),
+                json!("hello"),
+            )
+            .await
+            .expect_err("non-object arguments should fail locally");
+        assert!(
+            non_object
+                .to_string()
+                .contains("requires object arguments that match its input schema")
+        );
+        assert_eq!(state.tool_calls.load(Ordering::SeqCst), 0);
+
+        let outcome = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &run_context,
+            vec![ToolCall {
+                id: "call-approval".to_owned(),
+                name: "lookup".to_owned(),
+                arguments: serde_json::to_string(&json!({"q":"rust"})).expect("json"),
+                namespace: Some("mcp".to_owned()),
+            }],
+            None,
+            None,
+        )
+        .await
+        .expect("approval-gated discovery should interrupt");
+
+        assert_eq!(outcome.interruptions.len(), 1);
+        assert!(outcome.new_items.is_empty());
+        assert!(matches!(
+            outcome.interruptions[0].kind,
+            Some(crate::run_state::RunInterruptionKind::ToolApproval)
+        ));
+        assert_eq!(state.tool_calls.load(Ordering::SeqCst), 0);
+
+        let approved = execute_local_function_tools(
+            &agent,
+            &RunConfig::default(),
+            &run_context,
+            vec![ToolCall {
+                id: "call-approved".to_owned(),
+                name: "lookup".to_owned(),
+                arguments: serde_json::to_string(&json!({"q":"rust"})).expect("json"),
+                namespace: Some("mcp".to_owned()),
+            }],
+            None,
+            Some((
+                &crate::run_state::RunInterruption {
+                    kind: Some(crate::run_state::RunInterruptionKind::ToolApproval),
+                    approval_id: Some("approval-1".to_owned()),
+                    call_id: Some("call-approved".to_owned()),
+                    tool_name: Some("lookup".to_owned()),
+                    namespace: Some("mcp".to_owned()),
+                    reason: Some("tool approval required".to_owned()),
+                },
+                &crate::run_context::ApprovalRecord {
+                    approved: true,
+                    reason: Some("approved".to_owned()),
+                    approval_id: Some("approval-1".to_owned()),
+                    call_id: Some("call-approved".to_owned()),
+                    tool_name: Some("lookup".to_owned()),
+                    namespace: Some("mcp".to_owned()),
+                },
+            )),
+        )
+        .await
+        .expect("approved execution should succeed");
+
+        assert!(approved.interruptions.is_empty());
+        assert!(approved.new_items.iter().any(|item| {
+            matches!(
+                item,
+                RunItem::ToolCallOutput {
+                    tool_name,
+                    namespace,
+                    ..
+                } if tool_name == "lookup" && namespace.as_deref() == Some("mcp")
+            )
+        }));
+        assert_eq!(state.tool_calls.load(Ordering::SeqCst), 1);
     }
 }

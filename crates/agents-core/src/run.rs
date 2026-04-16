@@ -3372,7 +3372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runner_resume_omits_reasoning_replay_after_state_roundtrip_when_policy_is_omit() {
+    async fn reasoning_item_id_policy_omit_survives_resume() {
         let model = Arc::new(ResumeCaptureModel::default());
         let provider = Arc::new(ResumeCaptureProvider {
             model: model.clone(),

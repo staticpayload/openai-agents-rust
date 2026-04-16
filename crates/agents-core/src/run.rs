@@ -3857,7 +3857,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_sync_errors_when_runtime_is_already_running() {
+    async fn run_sync_rejects_active_runtime() {
         let agent = Agent::builder("assistant").build();
 
         let error = Runner::new()

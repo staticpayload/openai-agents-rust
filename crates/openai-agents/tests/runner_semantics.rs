@@ -70,7 +70,7 @@ impl ModelProvider for StructuredOutputLoopProvider {
 }
 
 #[tokio::test]
-async fn facade_free_run_uses_configured_default_runner() {
+async fn facade_run_uses_default_runner() {
     let _guard = default_runner_lock().lock().await;
     let original_runner = get_default_agent_runner();
     let _reset = DefaultRunnerReset(original_runner.clone());

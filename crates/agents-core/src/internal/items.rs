@@ -34,7 +34,12 @@ pub(crate) fn prepare_model_input_items(
     generated_items: &[RunItem],
     reasoning_item_id_policy: ReasoningItemIdPolicy,
 ) -> Vec<InputItem> {
-    compose_replay_input_items(caller_items, generated_items, reasoning_item_id_policy)
+    let mut prepared = copy_input_items(caller_items);
+    prepared.extend(run_items_to_input_items(
+        generated_items,
+        reasoning_item_id_policy,
+    ));
+    prepared
 }
 
 pub(crate) fn compose_replay_input_items(
@@ -500,5 +505,56 @@ mod tests {
             InputItem::Json { value }
                 if value.get("call_id").and_then(Value::as_str) == Some("pending-tool-search")
         ));
+    }
+
+    #[test]
+    fn prepare_model_input_preserves_caller_supplied_hosted_items() {
+        let prepared = prepare_model_input_items(
+            &[
+                InputItem::Json {
+                    value: json!({
+                        "type": "shell_call",
+                        "call_id": "shell-orphan",
+                        "status": "completed",
+                        "action": {"command": "echo keep-me"},
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "tool_search_output",
+                        "call_id": "search-orphan-output",
+                        "status": "completed",
+                        "tools": [],
+                    }),
+                },
+                InputItem::Json {
+                    value: json!({
+                        "type": "function_call",
+                        "call_id": "pending-user-call",
+                        "name": "lookup",
+                        "arguments": "{}",
+                    }),
+                },
+            ],
+            &[],
+            ReasoningItemIdPolicy::Preserve,
+        );
+
+        assert_eq!(prepared.len(), 3);
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("shell-orphan")
+        )));
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("search-orphan-output")
+        )));
+        assert!(prepared.iter().any(|item| matches!(
+            item,
+            InputItem::Json { value }
+                if value.get("call_id").and_then(Value::as_str) == Some("pending-user-call")
+        )));
     }
 }

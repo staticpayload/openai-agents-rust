@@ -1,0 +1,21 @@
+{
+  "featureId": "session-backend-local-parity",
+  "reviewedAt": "2026-04-16T16:02:40Z",
+  "commitId": "1d1fae1d96fe2171983bea2eb6018395807deeda",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The local session backend contract is covered correctly in `agents-core`: `MemorySession` resolves configured replay limits before trimming history, and `SQLiteSession` returns the newest limited slice in chronological order while supporting `pop_item()` and `clear_session()`. The focused regressions in `crates/agents-core/src/memory/session.rs` and `crates/agents-core/src/memory/sqlite_session.rs` match VAL-INTEGRATIONS-001 and VAL-INTEGRATIONS-002, and I did not find correctness or coverage gaps within this feature\u2019s stated scope.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "`rust-runtime-worker` does not document a verification-only path for cases where a feature is already present on the current branch, even though this mission can assign such features. That forced the worker to formally deviate from the required test-first procedure despite doing the correct thing for an already-landed parity slice.",
+      "evidence": "Skill procedure mandates \"Write failing tests first\" and \"Implement only after the new/updated tests fail\" (`.factory/skills/rust-runtime-worker/SKILL.md`:22-24). The reviewed handoff records `followedProcedure: false` and explicitly asks for a verification-only path when the feature has already landed (`/Users/staticpayload/.factory/missions/a79cf586-bde6-417e-92a4-dc7681913eac/handoffs/2026-04-16T15-27-40-122Z__session-backend-local-parity__e5dc30cf-7a8f-4e02-b207-965543a1812e.json`:99-100)."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Pass. The reviewed feature behavior is present and correctly exercised: `MemorySession` limit handling and `SQLiteSession` round-trip/pop/clear semantics align with the contract, with no feature-scope bugs found. I noted one skill-documentation gap around verification-only assignments for already-landed work."
+}

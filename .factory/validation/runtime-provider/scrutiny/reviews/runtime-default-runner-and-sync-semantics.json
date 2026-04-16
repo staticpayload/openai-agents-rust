@@ -1,0 +1,21 @@
+{
+  "featureId": "runtime-default-runner-and-sync-semantics",
+  "reviewedAt": "2026-04-16T16:02:24.033520+00:00",
+  "commitId": "59fc07b",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The commit correctly aligns the parity verification surface with the already-implemented runtime behavior. `agents_core::run()` and `openai_agents::run()` still resolve through the configurable default runner (`crates/agents-core/src/run.rs:1345-1395` and `crates/openai-agents/src/lib.rs:2-76`), and `Runner::run_sync()` still rejects active Tokio runtimes with a user-facing error (`crates/agents-core/src/run.rs:136-161`). The new integration test in `crates/agents-core/tests/run_sync_semantics.rs:1-16` closes the exact-name gap in the feature's verification command, while the facade test rename in `crates/openai-agents/tests/runner_semantics.rs:66-88` matches the contract wording without regressing behavior.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The mission shared state does not document that `cargo test <filter> -- --exact` will not match crate-local unit tests unless the fully qualified module path is used. This feature's verification step used a short exact name, so the worker had to discover the mismatch and add an integration test with a bare test name to make the contract command executable as written.",
+      "evidence": "Feature verification step at features.json:486 is `cargo test -p openai-agents-core-rs run_sync_rejects_active_runtime -- --exact`. The worker transcript shows that after the first targeted run they inspected `cargo test ... --list`, checked the crate layout, and then added `crates/agents-core/tests/run_sync_semantics.rs` so the exact filter would match."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed handoff, transcript skeleton, commit 59fc07b, and the relevant runtime/facade files. The feature passes review: it preserves the intended default-runner and active-runtime semantics while making the milestone's exact verification commands map cleanly onto real targeted tests."
+}

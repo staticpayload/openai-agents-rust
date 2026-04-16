@@ -1,0 +1,28 @@
+{
+  "featureId": "openai-hosted-tool-helper-and-replay-parity",
+  "reviewedAt": "2026-04-16T16:03:26.083506+00:00",
+  "commitId": "6b6fe4c",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. The commit adds the expected hosted-tool replay and websocket parity regressions, and the public facade still exposes the five hosted helper constructors. But the core change now sanitizes hosted tool artifacts on every `prepare_model_input_items()` call, not just replay/resume input. Because normal run preparation in `crates/agents-core/src/run.rs:557-560` uses this helper, fresh caller history can silently lose completed hosted tool items without matching outputs. That is broader than the feature contract's replay-only sanitation, and it diverges from the upstream split where only resumed/generated history is pruned while caller items are preserved.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/items.rs",
+        "line": 45,
+        "severity": "blocking",
+        "description": "`compose_replay_input_items()` now unconditionally calls `sanitize_hosted_tool_replay_items(base_items)`, and `prepare_model_input_items()` routes ordinary turn input through this path. As a result, non-resume runs can drop caller-supplied completed hosted tool items such as `shell_call` or `tool_search_call` when their outputs are absent, even though the feature only called for replay sanitation. Upstream keeps normal caller items intact and only prunes resumed/generated history, so this changes live run semantics rather than just fixing replay behavior."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "`rust-runtime-worker` currently requires a failing-test-first flow even when part of the assigned parity slice is already implemented and the remaining work is to add exact regression coverage. The worker deviated for that reason, and the handoff's suggested skill update appears justified.",
+      "evidence": "Handoff `skillFeedback.followedProcedure` is false only for step 3 ('Write failing tests first'), with the explanation that nearby websocket behavior was already green and the worker added the missing exact regression coverage plus targeted validation instead. The transcript skeleton also shows the worker otherwise followed the required mission/library-reading procedure."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature handoff, transcript skeleton, commit 6b6fe4c, and the relevant core/openai files. The feature does not pass scrutiny because the replay sanitizer is wired into normal model-input preparation, so it can drop caller-provided hosted tool history outside resume/replay flows."
+}

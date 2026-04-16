@@ -1,4 +1,5 @@
 commands:
+  init: .factory/init.sh
   install: cargo fetch --locked
   typecheck: cargo check --workspace
   build: cargo build --workspace --examples

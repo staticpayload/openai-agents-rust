@@ -86,6 +86,7 @@ This mission should extend the existing Rust workspace, not create a parallel sa
 - The facade crate stays thin; runtime ownership lives below it.
 - Stable role behavior belongs on `Agent`/`SandboxAgent`; request- and environment-specific execution belongs on `Runner`, `RunConfig`, and `SandboxRunConfig`, while `RunOptions` is reserved for per-call overrides rather than long-lived sandbox definition.
 - `RunState` remains the canonical public pause/resume boundary, even if sandbox uses dedicated nested session-state types internally.
+- When adding new default hooks or behavior to `ModelProvider`, audit wrapper providers such as `MultiProvider` and forward the new behavior explicitly so routed models preserve provider-specific metadata and request shaping.
 - Runner-created sandbox sessions are runner-managed; caller-injected live sessions remain caller-managed.
 - Sandbox file, shell, and patch operations must stay rooted to the sandbox workspace and must not escape onto the host filesystem.
 - Optional hosted backends must not force third-party provider dependencies into the core runtime crate.

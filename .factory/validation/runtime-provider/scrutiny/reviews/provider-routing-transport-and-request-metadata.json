@@ -1,0 +1,15 @@
+{
+  "featureId": "provider-routing-transport-and-request-metadata",
+  "reviewedAt": "2026-04-16T16:02:24.966938Z",
+  "commitId": "c8efbc9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The feature stays within the intended crate boundaries and adds precise regression coverage for the three assigned parity assertions without uncovering correctness or contract gaps in the underlying routing and OpenAI transport/request-shaping code.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed handoff, transcript skeleton, commit c8efbc9 diff, and the relevant runtime/provider code paths. The feature correctly validates MultiProvider prefix routing in agents-core and OpenAI Responses transport isolation plus websocket metadata/header/query/conversation forwarding in agents-openai; I did not find blocking or non-blocking issues in scope."
+}

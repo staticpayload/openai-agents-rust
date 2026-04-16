@@ -1,0 +1,21 @@
+{
+  "featureId": "agent-tools-and-approval-flow-parity",
+  "reviewedAt": "2026-04-16T16:03:14Z",
+  "commitId": "325191a",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. Commit `325191a` stays within the intended `agents-core` boundary and fixes the feature's exact-match verification gap by adding public-API integration coverage in `crates/agents-core/tests/tool_approval_semantics.rs:1-194`. The underlying approval resume implementation already enforces bound approvals before replaying the pending tool call in `crates/agents-core/src/run.rs:1059-1127`, and the existing facade coverage for nested agent-as-tool state/input preservation remains in `crates/openai-agents/tests/runner_semantics.rs:138-178`. I did not find correctness regressions or missing in-scope contract behavior in the reviewed change.",
+    "issues": []
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The mission shared state does not currently call out that `cargo test <filter> -- --exact` will not match crate-local unit tests unless the fully qualified module path is used. For parity features that publish short exact-name verification commands, workers may need integration tests or fully qualified test names to make the command execute real tests.",
+      "evidence": "This feature's verification steps in `features.json:697-698` use short exact-name filters for `openai-agents-core-rs`. The handoff for commit `325191a` explicitly states the change was needed so those commands would execute real tests instead of filtering down to zero unit tests, and the worker added `crates/agents-core/tests/tool_approval_semantics.rs` for that purpose."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature entry, handoff, transcript skeleton, commit `325191a`, and the relevant runtime/facade code paths. The feature passes review: approval-gated resume semantics remain correctly bound in core, the facade nested agent-as-tool parity coverage is still present, and the new integration test target makes the milestone's exact verification commands map to real tests."
+}

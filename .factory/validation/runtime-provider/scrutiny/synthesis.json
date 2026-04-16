@@ -1,0 +1,113 @@
+{
+  "milestone": "runtime-provider",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace -- --test-threads=5",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 12,
+    "passed": 6,
+    "failed": 6,
+    "failedFeatures": [
+      "openai-hosted-tool-helper-and-replay-parity",
+      "realtime-session-and-transport-parity",
+      "runtime-conversation-tracking-and-session-input",
+      "runtime-turn-controls-and-input-filtering",
+      "trace-and-harness-metadata-parity",
+      "voice-workflow-and-audio-parity"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "openai-hosted-tool-helper-and-replay-parity",
+      "severity": "blocking",
+      "description": "`compose_replay_input_items()` now unconditionally calls `sanitize_hosted_tool_replay_items(base_items)`, and `prepare_model_input_items()` routes ordinary turn input through this path. As a result, non-resume runs can drop caller-supplied completed hosted tool items such as `shell_call` or `tool_search_call` when their outputs are absent, even though the feature only called for replay sanitation. Upstream keeps normal caller items intact and only prunes resumed/generated history, so this changes live run semantics rather than just fixing replay behavior."
+    },
+    {
+      "featureId": "realtime-session-and-transport-parity",
+      "severity": "blocking",
+      "description": "`RealtimeSessionModelSettings::merge()` and its nested helpers always keep the old value whenever the update field is `None` (for example `update.voice.clone().or_else(|| self.voice.clone())`, `update.speed.or(self.speed)`, and the nested `current.merge(next)` branches at lines 20-168). That means a caller cannot explicitly clear a previously-applied setting such as `voice`, `speed`, `turn_detection`, `transcription`, `noise_reduction`, or `tracing` once it has been set. The feature description says prior settings should be preserved unless explicitly replaced; after this change, replacing a field with 'unset/disabled' is impossible, which is a parity gap versus the Python session-update surface that accepts explicit `None`/null values in its settings dictionaries."
+    },
+    {
+      "featureId": "runtime-conversation-tracking-and-session-input",
+      "severity": "blocking",
+      "description": "After `session_input_callback` runs, `prepare_input_with_session()` overwrites an empty callback result with `original_input` (`prepared = original_input.clone(); session_input_items = original_input.clone();`). A callback that intentionally returns `[]` therefore cannot suppress replay input, and the supposedly dropped new-turn items are still appended back into the session store. Upstream parity keeps the callback's empty result instead of restoring the original input, so this feature still does not fully satisfy the `session_input_callback` rewrite contract."
+    },
+    {
+      "featureId": "runtime-turn-controls-and-input-filtering",
+      "severity": "blocking",
+      "description": "`validate_handler_final_output()` only checks for `Value::Null`, so the `max_turns` recovery path in `crates/agents-core/src/run.rs:851` accepts arbitrary handler output for structured-output agents without schema validation. A malformed handler payload can therefore bypass the agent's declared output schema and produce a successful terminal result, which breaks structured-output parity on max-turn recovery."
+    },
+    {
+      "featureId": "trace-and-harness-metadata-parity",
+      "severity": "blocking",
+      "description": "`MultiProvider` was not updated to forward the new `ModelProvider::resolve_trace_metadata()` and `prepare_request()` hooks that this feature added. Because `Runner` invokes those hooks on the top-level provider (`crates/agents-core/src/run.rs:435` and `crates/agents-core/src/run.rs:1262`), a run configured with `MultiProvider` and an OpenAI route such as `openai/gpt-5` skips the OpenAI harness merge entirely: `agent_harness_id` is absent from both the trace metadata and the outbound request metadata even though the selected underlying provider is `OpenAIProvider`. The new tests only cover direct `OpenAIProvider` usage, so this public wrapper-provider path regressed unnoticed."
+    },
+    {
+      "featureId": "voice-workflow-and-audio-parity",
+      "severity": "blocking",
+      "description": "Transcript-only runs still call `tts_model.synthesize()` even when `VoicePipelineConfig.stream_audio` is `false`. Audio suppression happens later in `VoiceStreamRecorder::push_events()` (`crates/agents-voice/src/result.rs:177`), so a disabled-audio pipeline still depends on TTS succeeding and still pays synthesis work. That violates the feature contract to suppress audio when output streaming is disabled; a transcript-only run can currently fail because of TTS even though no audio should be produced."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "services.yaml",
+      "description": "Added `commands.init: .factory/init.sh` so the shared preflight used by workers is captured in the mission command manifest.",
+      "sourceFeature": "realtime-session-and-transport-parity"
+    },
+    {
+      "target": "library",
+      "description": "Documented `.factory/init.sh` preflight usage and the `cargo test <filter> -- --exact` caveat for crate-local unit tests in `.factory/library/environment.md`.",
+      "sourceFeature": "runtime-default-runner-and-sync-semantics"
+    },
+    {
+      "target": "library",
+      "description": "Documented that new `ModelProvider` default hooks must be forwarded through wrapper providers like `MultiProvider` in `.factory/library/architecture.md`.",
+      "sourceFeature": "trace-and-harness-metadata-parity"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skills",
+      "suggestion": "Update `rust-runtime-worker` to define a verification-only path for assignments where behavior is already present or the remaining task is exact regression coverage, so workers can skip the strict test-first sequence without reporting a false procedure violation.",
+      "evidence": "Reviews for `session-backend-local-parity`, `openai-hosted-tool-helper-and-replay-parity`, and `realtime-session-and-transport-parity` all flagged the current test-first wording as a poor fit for already-landed parity slices and inconsistent handoff reporting.",
+      "isSystemic": true
+    },
+    {
+      "target": "skills",
+      "suggestion": "Clarify when `rust-runtime-worker` requires a manual shell verification for public-facade behavior and require workers to record a deviation when they intentionally rely on automated cargo validation only.",
+      "evidence": "Reviews for `runtime-turn-controls-and-input-filtering`, `runtime-conversation-tracking-and-session-input`, and `runtime-openai-session-and-runstate-parity` all found the manual-verification rule ambiguous or skipped without being called out in handoff metadata.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "The second `cargo test <filter> -- --exact` caveat report from `agent-tools-and-approval-flow-parity` duplicates the same validator quirk already captured from `runtime-default-runner-and-sync-semantics`.",
+      "reason": "duplicate"
+    },
+    {
+      "observation": "The manual-verification observation in `runtime-turn-controls-and-input-filtering` duplicates the same `rust-runtime-worker` guidance gap also reported by `runtime-conversation-tracking-and-session-input` and `runtime-openai-session-and-runstate-parity`.",
+      "reason": "duplicate"
+    },
+    {
+      "observation": "The `followedProcedure=true` mismatch noted by `realtime-session-and-transport-parity` is evidence for the broader verification-only/test-first skill issue, not a separate shared-state change to apply independently.",
+      "reason": "ambiguous"
+    }
+  ],
+  "previousRound": null
+}

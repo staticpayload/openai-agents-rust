@@ -1,0 +1,22 @@
+{
+  "featureId": "voice-workflow-and-audio-parity",
+  "reviewedAt": "2026-04-16T16:02:28Z",
+  "commitId": "74521f3",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The handoff commit correctly adds the missing exact-name facade regression for the combined STT/TTS check, but the underlying voice pipeline still has a blocking parity gap: disabling output streaming only filters emitted audio events after synthesis instead of skipping TTS generation entirely.",
+    "issues": [
+      {
+        "file": "crates/agents-voice/src/pipeline.rs",
+        "line": 300,
+        "severity": "blocking",
+        "description": "Transcript-only runs still call `tts_model.synthesize()` even when `VoicePipelineConfig.stream_audio` is `false`. Audio suppression happens later in `VoiceStreamRecorder::push_events()` (`crates/agents-voice/src/result.rs:177`), so a disabled-audio pipeline still depends on TTS succeeding and still pays synthesis work. That violates the feature contract to suppress audio when output streaming is disabled; a transcript-only run can currently fail because of TTS even though no audio should be produced."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature handoff, commit `74521f3`, transcript skeleton, skill file, and current voice pipeline/tests. The new regression test is good, but the feature should not be considered complete because `stream_audio = false` does not actually disable TTS execution."
+}

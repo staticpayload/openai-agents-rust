@@ -1,0 +1,28 @@
+{
+  "featureId": "runtime-conversation-tracking-and-session-input",
+  "reviewedAt": "2026-04-16T16:03:21Z",
+  "commitId": "f8f58af",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. The commit usefully preserves typed `AgentsError` values for streamed completions (`crates/agents-core/src/internal/streaming.rs`) and adds focused regressions for conversation delta replay, automatic previous-response chaining, session conflict handling, replay limits, and callback-based history rewriting (`crates/agents-core/src/run.rs`). However, the feature is still incomplete for `session_input_callback`: the session preparation path force-restores the original input whenever the callback returns an empty list, so callers cannot intentionally drop replay input and the session store will persist the dropped new-turn items anyway. That still misses the contract's requirement that callback rewrites be deterministic and not corrupt persisted items.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/session_persistence.rs",
+        "line": 111,
+        "severity": "blocking",
+        "description": "After `session_input_callback` runs, `prepare_input_with_session()` overwrites an empty callback result with `original_input` (`prepared = original_input.clone(); session_input_items = original_input.clone();`). A callback that intentionally returns `[]` therefore cannot suppress replay input, and the supposedly dropped new-turn items are still appended back into the session store. Upstream parity keeps the callback's empty result instead of restoring the original input, so this feature still does not fully satisfy the `session_input_callback` rewrite contract."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The `rust-runtime-worker` skill requires one manual shell verification when public runtime behavior changes, but this feature handoff/transcript only recorded automated Cargo checks and no manual smoke step.",
+      "evidence": "`.factory/skills/rust-runtime-worker/SKILL.md` step 6 says to perform one manual shell verification for user-visible public-facade behavior. The handoff for session `7183a076-d165-4821-a3b0-e3688019b350` lists only `commandsRun`, and the transcript skeleton shows cargo test/check/fmt commands but no temp-crate/example/manual smoke execution."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the mission artifacts, transcript skeleton, and commit `f8f58af`. The conversation-tracking and streamed-session error work is mostly solid, but the feature should not pass yet because empty `session_input_callback` rewrites are still overridden back to the original input and persisted session items."
+}

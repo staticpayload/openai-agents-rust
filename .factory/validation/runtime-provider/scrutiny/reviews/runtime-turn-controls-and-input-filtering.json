@@ -1,0 +1,28 @@
+{
+  "featureId": "runtime-turn-controls-and-input-filtering",
+  "reviewedAt": "2026-04-16T16:03:19Z",
+  "commitId": "59fc07be53d5075a6e8257642739841902209543",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. The reviewed code covers the per-call `RunOptions` override flow, plain/streamed `call_model_input_filter` behavior, and structured-output `max_turns` exhaustion, but the max-turn recovery path is not parity-complete for structured-output agents. When `run_error_handlers.max_turns` returns terminal output, the runner only rejects `null`; it does not validate the recovered payload against the agent's structured output schema before accepting it. That means a structured-output run can silently succeed with invalid handler output even though normal model responses are schema-checked and the upstream parity target validates this path.",
+    "issues": [
+      {
+        "file": "crates/agents-core/src/internal/error_handlers.rs",
+        "line": 34,
+        "severity": "blocking",
+        "description": "`validate_handler_final_output()` only checks for `Value::Null`, so the `max_turns` recovery path in `crates/agents-core/src/run.rs:851` accepts arbitrary handler output for structured-output agents without schema validation. A malformed handler payload can therefore bypass the agent's declared output schema and produce a successful terminal result, which breaks structured-output parity on max-turn recovery."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "The runtime worker skill requires one manual shell verification for public-facade-visible behavior, but this feature's transcript/handoff shows only automated cargo commands even though facade semantics were part of the verified surface.",
+      "evidence": "`.factory/skills/rust-runtime-worker/SKILL.md:28` requires \"Perform one manual shell verification when behavior is user-visible from the public facade\". The feature handoff at `/Users/staticpayload/.factory/missions/a79cf586-bde6-417e-92a4-dc7681913eac/handoffs/2026-04-16T14-43-12-164Z__runtime-turn-controls-and-input-filtering__89a1662a-5146-4312-90c2-e6c9e5aa6a93.json:14-58` lists only `cargo test`/`cargo check` commands and no manual verification entry."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the mission feature entry, handoff, transcript skeleton, commit `59fc07be53d5075a6e8257642739841902209543`, and the relevant runtime/facade sources. The feature fails review because max-turn handler recovery does not validate structured-output handler payloads against the agent schema, allowing invalid terminal outputs to succeed."
+}

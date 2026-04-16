@@ -4136,6 +4136,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_input_callback_can_suppress_replay_input() {
+        let model = Arc::new(SessionCaptureModel::default());
+        let provider = Arc::new(SessionCaptureProvider {
+            model: model.clone(),
+        });
+        let session = MemorySession::new("session");
+        session
+            .add_items(vec![
+                InputItem::from("history-1"),
+                InputItem::from("history-2"),
+            ])
+            .await
+            .expect("history should be stored");
+        let agent = Agent::builder("assistant").build();
+
+        let result = Runner::new()
+            .with_model_provider(provider)
+            .with_config(RunConfig {
+                session_input_callback: Some(Arc::new(|_history, _new_items| {
+                    async move { Ok(Vec::new()) }.boxed()
+                })),
+                ..RunConfig::default()
+            })
+            .run_with_session(&agent, "hello", &session)
+            .await
+            .expect("session-backed run should succeed");
+
+        let seen_inputs = model.seen_inputs.lock().expect("session seen inputs lock");
+        assert_eq!(seen_inputs.len(), 1);
+        assert!(seen_inputs[0].is_empty());
+        drop(seen_inputs);
+
+        let persisted = session
+            .get_items()
+            .await
+            .expect("session items should load");
+        assert_eq!(persisted.len(), 3);
+        assert_eq!(persisted[0].as_text(), Some("history-1"));
+        assert_eq!(persisted[1].as_text(), Some("history-2"));
+        assert_eq!(persisted[2].as_text(), Some("session-ok"));
+        assert!(persisted.iter().all(|item| item.as_text() != Some("hello")));
+        assert_eq!(result.final_output.as_deref(), Some("session-ok"));
+        assert_eq!(
+            result
+                .durable_state()
+                .map(|state| state.persisted_item_count),
+            Some(1)
+        );
+    }
+
+    #[tokio::test]
     async fn runner_fires_run_and_agent_hooks_for_llm_and_tool_events() {
         let provider = Arc::new(FakeProvider {
             model: Arc::new(FakeModel::default()),

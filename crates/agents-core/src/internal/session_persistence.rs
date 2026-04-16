@@ -108,7 +108,7 @@ pub(crate) async fn prepare_input_with_session(
         prepared.extend(original_input.clone());
         (prepared, original_input.clone())
     };
-    if prepared.is_empty() {
+    if prepared.is_empty() && config.session_input_callback.is_none() {
         prepared = original_input.clone();
         session_input_items = original_input.clone();
     }

@@ -20,13 +20,17 @@ None.
 1. Read `mission.md`, mission `AGENTS.md`, `.factory/library/architecture.md`, `.factory/library/parity.md`, `.factory/library/environment.md`, and the feature’s `fulfills` assertions before editing code.
 2. Map the feature to the narrowest crate boundary that should own the change. Keep facade re-exports thin and preserve the existing crate layering.
 3. Write failing tests first. Prefer crate-local unit tests for core behavior and facade semantics tests for public-contract behavior. If the feature changes public imports or docs-visible behavior, also add a temp-crate or example-based smoke test.
-4. Implement only after the new/updated tests fail for the intended reason.
-5. Re-run the targeted tests until they pass, then run broader validation from `.factory/services.yaml` appropriate to the blast radius:
+4. Verification-only exception: if the assigned behavior is already present and the real gap is missing exact regression coverage, contract-facing test names, or facade-level proof, you may take a verification-first path instead of forcing an artificial red/green cycle. In that case:
+   - prove the shipped behavior already exists with the strongest available targeted commands
+   - add or rename the missing regression coverage so the feature verification commands are exact and durable
+   - state clearly in the handoff that you used the verification-only path and why no product code change was needed
+5. Implement only after the new/updated tests fail for the intended reason when the feature actually requires code changes.
+6. Re-run the targeted tests until they pass, then run broader validation from `.factory/services.yaml` appropriate to the blast radius:
    - always run the narrowest relevant `cargo test ...`
    - run `cargo check --workspace` for public API or cross-crate changes
    - run `cargo build --workspace --examples` if examples or facade imports are affected
-6. Perform one manual shell verification when behavior is user-visible from the public facade (for example: temp Cargo project import, example build, or targeted `cargo run` smoke).
-7. Before handoff, confirm no uncommitted generated junk or temp files remain.
+7. Perform one manual shell verification when behavior is user-visible from the public facade and there is a stable shell path to exercise it (for example: temp Cargo project import, example build, or targeted `cargo run` smoke). If you intentionally rely on automated cargo validation only, say so explicitly in the handoff and explain why a manual shell check was not the right tool for that feature.
+8. Before handoff, confirm no uncommitted generated junk or temp files remain.
 
 ## Example Handoff
 

@@ -241,3 +241,48 @@ async fn voice_pipeline_forwards_configured_tts_settings_to_runtime_models() {
         "transcribed:audio/wav:3|model=gpt-4o-mini-tts|voice=fable|speed=1.25"
     );
 }
+
+#[tokio::test]
+async fn voice_pipeline_forwards_configured_stt_and_tts_settings() {
+    let workflow = SingleAgentVoiceWorkflow::new(Agent::builder("assistant").build());
+    let pipeline = VoicePipeline::new(VoicePipelineConfig {
+        stream_audio: true,
+        stt_settings: openai_agents::voice::STTModelSettings {
+            model: Some("whisper-1".to_owned()),
+            language: Some("en".to_owned()),
+            prompt: Some("be precise".to_owned()),
+        },
+        tts_settings: openai_agents::voice::TTSModelSettings {
+            model: Some("gpt-4o-mini-tts".to_owned()),
+            voice: Some("fable".to_owned()),
+            speed: Some(1.25),
+        },
+        ..VoicePipelineConfig::default()
+    });
+
+    let completed = pipeline
+        .run(
+            &workflow,
+            AudioInput {
+                mime_type: "audio/wav".to_owned(),
+                bytes: vec![1, 2, 3],
+            },
+        )
+        .await
+        .expect("pipeline should start")
+        .wait_for_completion()
+        .await
+        .expect("pipeline should complete");
+
+    assert_eq!(
+        completed.transcript,
+        vec!["transcribed:audio/wav:3".to_owned()]
+    );
+    assert!(!completed.transcript[0].contains("whisper-1"));
+    assert!(!completed.transcript[0].contains("be precise"));
+    assert_eq!(completed.audio_chunks, 1);
+    assert_eq!(
+        first_audio_text(&completed.events),
+        "transcribed:audio/wav:3|model=gpt-4o-mini-tts|voice=fable|speed=1.25"
+    );
+}

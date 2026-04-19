@@ -12,11 +12,12 @@ use crate::items::{InputItem, RunItem};
 use crate::model::ModelResponse;
 use crate::run_config::ReasoningItemIdPolicy;
 use crate::run_context::{ApprovalRecord, RunContextWrapper};
+use crate::sandbox::SandboxRunState;
 use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult};
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
-pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.7";
+pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.8";
 
 /// Serializable snapshot of the runtime context carried across a run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -77,6 +78,8 @@ pub struct RunState {
     pub persisted_item_count: usize,
     pub trace: Option<Trace>,
     pub context_snapshot: RunStateContextSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox: Option<SandboxRunState>,
 }
 
 impl Default for RunState {
@@ -103,6 +106,7 @@ impl Default for RunState {
             persisted_item_count: 0,
             trace: None,
             context_snapshot: RunStateContextSnapshot::default(),
+            sandbox: None,
         }
     }
 }

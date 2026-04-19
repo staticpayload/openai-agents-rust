@@ -300,6 +300,8 @@ pub struct Agent {
     pub hooks: Option<SharedAgentHooks>,
     #[serde(skip, default)]
     pub tool_use_behavior: ToolUseBehavior,
+    #[serde(skip, default)]
+    pub sandbox_runtime: Option<crate::sandbox::AgentSandboxRuntime>,
 }
 
 impl fmt::Debug for Agent {
@@ -327,6 +329,10 @@ impl fmt::Debug for Agent {
             .field("model", &self.model)
             .field("hooks", &self.hooks.as_ref().map(|_| "<hooks>"))
             .field("tool_use_behavior", &self.tool_use_behavior)
+            .field(
+                "sandbox_runtime",
+                &self.sandbox_runtime.as_ref().map(|_| "<sandbox-runtime>"),
+            )
             .finish()
     }
 }

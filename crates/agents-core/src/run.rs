@@ -954,6 +954,10 @@ impl Runner {
         if let Some(interruption) = interruptions.first().cloned() {
             run_state.current_step = Some(interruption);
         }
+        run_state.sandbox = current_agent
+            .sandbox_runtime
+            .as_ref()
+            .map(crate::sandbox::AgentSandboxRuntime::snapshot);
         let trace = trace_manager.finish();
         run_state.set_trace(trace.clone());
         let normalized_result_items = (normalized_generated_items != session_generated_items)
@@ -997,6 +1001,16 @@ impl Runner {
         let agent = state.current_agent.clone().ok_or_else(|| UserError {
             message: "cannot resume a run state without a current agent".to_owned(),
         })?;
+        let agent = crate::sandbox::restore_agent_from_run_state(&agent, state.sandbox.as_ref())?;
+        if matches!(
+            state
+                .current_step
+                .as_ref()
+                .and_then(|step| step.kind.clone()),
+            Some(RunInterruptionKind::ToolApproval)
+        ) {
+            return self.resume_pending_tool_approval(state, &agent).await;
+        }
 
         let mut resumed_config = self.config.clone();
         resumed_config.max_turns = state.remaining_turns();
@@ -1067,7 +1081,9 @@ impl Runner {
 
     pub async fn resume_with_agent(&self, state: &RunState, agent: &Agent) -> Result<RunResult> {
         let mut rebound_state = state.clone();
-        rebound_state.set_current_agent(agent.clone());
+        let resumed_agent =
+            crate::sandbox::restore_agent_from_run_state(agent, rebound_state.sandbox.as_ref())?;
+        rebound_state.set_current_agent(resumed_agent.clone());
         if matches!(
             rebound_state
                 .current_step
@@ -1076,7 +1092,7 @@ impl Runner {
             Some(RunInterruptionKind::ToolApproval)
         ) {
             return self
-                .resume_pending_tool_approval(&rebound_state, agent)
+                .resume_pending_tool_approval(&rebound_state, &resumed_agent)
                 .await;
         }
         self.resume(&rebound_state).await
@@ -1664,6 +1680,7 @@ fn merge_run_states(previous: &RunState, next: &mut RunState) {
 
     next.persisted_item_count += previous.persisted_item_count;
     next.trace = previous.trace.clone().or(next.trace.clone());
+    next.sandbox = next.sandbox.clone().or_else(|| previous.sandbox.clone());
     next.context_snapshot.context = previous.context_snapshot.context.clone();
     next.context_snapshot.usage = internal_agent_runner_helpers::merge_usage(
         previous.context_snapshot.usage,

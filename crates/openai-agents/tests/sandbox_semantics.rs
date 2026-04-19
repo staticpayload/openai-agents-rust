@@ -10,10 +10,11 @@ use openai_agents::sandbox::{
     Dir, File, LocalDir, LocalSandboxSession, Manifest, prepare_sandbox_run,
 };
 use openai_agents::{
-    ApplyPatchOperation, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, RunConfig,
-    RunContext, RunContextWrapper, Runner, SandboxAgent, SandboxCapability, SandboxRunConfig, Tool,
-    ToolContext, ToolOutput, Usage,
+    ApplyPatchOperation, InputItem, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem,
+    RunConfig, RunContext, RunContextWrapper, RunInterruptionKind, Runner, SandboxAgent,
+    SandboxCapability, SandboxRunConfig, Tool, ToolContext, ToolOutput, Usage,
 };
+use serde_json::json;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
@@ -50,6 +51,70 @@ struct CapturingSandboxProvider {
 impl ModelProvider for CapturingSandboxProvider {
     fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
         self.model.clone()
+    }
+}
+
+#[derive(Clone, Default)]
+struct ApprovalResumeSandboxModel {
+    calls: Arc<Mutex<usize>>,
+}
+
+#[async_trait]
+impl Model for ApprovalResumeSandboxModel {
+    async fn generate(&self, request: ModelRequest) -> openai_agents::Result<ModelResponse> {
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
+
+        match *calls {
+            1 => Ok(ModelResponse {
+                model: request.model,
+                output: vec![OutputItem::ToolCall {
+                    call_id: "call-1".to_owned(),
+                    tool_name: "sandbox_read_file".to_owned(),
+                    arguments: json!({ "path": "/workspace/pre_resume.txt" }),
+                    namespace: None,
+                }],
+                usage: Usage::default(),
+                response_id: Some("sandbox-resume-response-1".to_owned()),
+                request_id: Some("sandbox-resume-request-1".to_owned()),
+            }),
+            _ => {
+                let resumed_text = request
+                    .input
+                    .iter()
+                    .filter_map(|item| match item {
+                        InputItem::Text { text } => Some(text.as_str()),
+                        InputItem::Json { value } => value
+                            .get("type")
+                            .and_then(|kind| (kind == "tool_call_output").then_some(value))
+                            .and_then(|value| value.get("output"))
+                            .and_then(|output| {
+                                output
+                                    .get("text")
+                                    .and_then(|text| text.as_str())
+                                    .or_else(|| output.as_str())
+                            }),
+                    })
+                    .find(|text| text.contains("persisted before approval"))
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "resumed input missing sandbox tool output: {:?}",
+                            request.input
+                        )
+                    })
+                    .to_owned();
+
+                Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::Text {
+                        text: format!("resumed:{resumed_text}"),
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("sandbox-resume-response-2".to_owned()),
+                    request_id: Some("sandbox-resume-request-2".to_owned()),
+                })
+            }
+        }
     }
 }
 
@@ -1133,6 +1198,167 @@ fn running_sessions_reject_unsupported_manifest_mutations() {
     );
 
     fs::remove_dir_all(workspace_root).expect("caller cleans up injected live session");
+}
+
+#[tokio::test]
+async fn sandbox_runstate_resume_restores_workspace_after_approval() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let provider = Arc::new(CapturingSandboxProvider {
+        model: Arc::new(ApprovalResumeSandboxModel::default()),
+    });
+    let sandbox_agent = SandboxAgent::builder("sandbox")
+        .instructions("Resume the same workspace after approval.")
+        .build();
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default()),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+    prepared
+        .session
+        .write_file("/workspace/pre_resume.txt", "persisted before approval\n")
+        .expect("pre-interruption file write should succeed");
+
+    let approval_gated_agent = prepared.agent.clone_with(|agent| {
+        let read_tool = agent
+            .find_function_tool("sandbox_read_file", None)
+            .expect("sandbox read tool is attached")
+            .clone()
+            .with_needs_approval(true);
+        agent
+            .function_tools
+            .retain(|tool| tool.definition.name != "sandbox_read_file");
+        agent.function_tools.push(read_tool);
+    });
+
+    let initial = Runner::new()
+        .with_model_provider(provider.clone())
+        .run(&approval_gated_agent, "resume after approval")
+        .await
+        .expect("initial sandbox run should interrupt cleanly");
+
+    assert!(initial.final_output.is_none());
+    assert!(matches!(
+        initial
+            .interruptions
+            .first()
+            .and_then(|step| step.kind.clone()),
+        Some(RunInterruptionKind::ToolApproval)
+    ));
+
+    let mut state = initial
+        .durable_state()
+        .cloned()
+        .expect("interrupted run should expose durable state");
+    let serialized_state =
+        serde_json::to_value(&state).expect("sandbox run state should serialize with resume data");
+    let sandbox_payload = serialized_state
+        .get("sandbox")
+        .and_then(|value| value.get("session_state"))
+        .cloned()
+        .expect("run state should capture sandbox session state");
+    assert_eq!(
+        sandbox_payload
+            .get("workspace_root_owned")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        sandbox_payload
+            .get("workspace_root_ready")
+            .and_then(|value| value.as_bool()),
+        Some(true)
+    );
+
+    state.approve_for_tool(
+        "call-1",
+        Some("sandbox_read_file".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let resumed = Runner::new()
+        .with_model_provider(provider)
+        .resume(&state)
+        .await
+        .expect("resumed sandbox run should succeed");
+
+    assert_eq!(
+        resumed.final_output.as_deref(),
+        Some("resumed:persisted before approval\n")
+    );
+    assert_eq!(
+        resumed
+            .durable_state()
+            .and_then(|state| state.sandbox.as_ref())
+            .map(|state| state.session_state.workspace_root.clone()),
+        Some(prepared.session.workspace_root())
+    );
+}
+
+#[test]
+fn explicit_session_state_roundtrip_resumes_same_workspace() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let initial = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(Manifest::default()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("initial sandbox prep succeeds");
+    initial
+        .session
+        .write_file("/workspace/roundtrip.txt", "session-state roundtrip\n")
+        .expect("session-state file write should succeed");
+
+    let serialized = initial
+        .session
+        .serialize_session_state()
+        .expect("sandbox session state should serialize");
+    let restored_state = LocalSandboxSession::deserialize_session_state(serialized)
+        .expect("sandbox session state should deserialize");
+    let restored = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("session-state resume should prepare");
+
+    assert_eq!(
+        restored.session.workspace_root(),
+        initial.session.workspace_root()
+    );
+    assert_eq!(
+        restored
+            .session
+            .read_file("/workspace/roundtrip.txt")
+            .expect("resumed workspace should keep prior file"),
+        "session-state roundtrip\n"
+    );
+
+    restored
+        .session
+        .write_file("/workspace/extended.txt", "still same workspace\n")
+        .expect("resumed session should keep extending the same workspace");
+    assert_eq!(
+        initial
+            .session
+            .read_file("/workspace/extended.txt")
+            .expect("original session should see changes from resumed handle"),
+        "still same workspace\n"
+    );
 }
 
 #[test]

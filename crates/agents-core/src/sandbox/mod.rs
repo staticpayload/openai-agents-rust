@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::agent::{Agent, AgentBuilder};
 use crate::editor::{ApplyPatchOperation, ApplyPatchResult};
@@ -27,6 +28,7 @@ pub struct SandboxConcurrencyLimits {
 pub struct SandboxRunConfig {
     pub manifest: Option<Manifest>,
     pub concurrency_limits: SandboxConcurrencyLimits,
+    pub session_state: Option<LocalSandboxSessionState>,
     #[serde(skip, default)]
     pub session: Option<LocalSandboxSession>,
 }
@@ -271,6 +273,30 @@ pub struct PreparedSandboxRun {
 }
 
 #[derive(Clone, Debug)]
+pub struct AgentSandboxRuntime {
+    pub(crate) base_instructions: Option<String>,
+    pub(crate) user_instructions: Option<String>,
+    pub(crate) capabilities: Vec<SandboxCapability>,
+    pub(crate) session: LocalSandboxSession,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalSandboxSessionState {
+    pub manifest: Manifest,
+    pub workspace_root: PathBuf,
+    pub workspace_root_owned: bool,
+    pub workspace_root_ready: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxRunState {
+    pub base_instructions: Option<String>,
+    pub user_instructions: Option<String>,
+    pub capabilities: Vec<SandboxCapability>,
+    pub session_state: LocalSandboxSessionState,
+}
+
+#[derive(Clone, Debug)]
 pub struct LocalSandboxSession {
     inner: Arc<LocalSandboxSessionInner>,
 }
@@ -345,6 +371,53 @@ impl LocalSandboxSession {
 
     pub fn runner_owned(&self) -> bool {
         self.inner.runner_owned
+    }
+
+    pub fn session_state(&self) -> LocalSandboxSessionState {
+        LocalSandboxSessionState {
+            manifest: self.manifest(),
+            workspace_root: self.workspace_root(),
+            workspace_root_owned: self.runner_owned(),
+            workspace_root_ready: self.inner.workspace_root.is_dir(),
+        }
+    }
+
+    pub fn serialize_session_state(&self) -> Result<Value> {
+        serde_json::to_value(self.session_state())
+            .map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    pub fn deserialize_session_state(payload: Value) -> Result<LocalSandboxSessionState> {
+        serde_json::from_value(payload).map_err(|error| AgentsError::message(error.to_string()))
+    }
+
+    pub fn resume(state: LocalSandboxSessionState) -> Result<Self> {
+        if state.workspace_root_ready {
+            if !state.workspace_root.is_dir() {
+                return Err(AgentsError::message(format!(
+                    "sandbox workspace `{}` is not available for resume",
+                    state.workspace_root.display()
+                )));
+            }
+        } else {
+            fs::create_dir_all(&state.workspace_root)
+                .map_err(|error| AgentsError::message(error.to_string()))?;
+            if let Err(error) = materialize_manifest(&state.manifest, &state.workspace_root) {
+                if state.workspace_root_owned {
+                    let _ = fs::remove_dir_all(&state.workspace_root);
+                }
+                return Err(error);
+            }
+        }
+
+        Ok(Self {
+            inner: Arc::new(LocalSandboxSessionInner {
+                workspace_root: state.workspace_root,
+                manifest: Mutex::new(state.manifest),
+                runner_owned: state.workspace_root_owned,
+                cleaned: Mutex::new(false),
+            }),
+        })
     }
 
     pub fn cleanup(&self) -> Result<()> {
@@ -602,6 +675,8 @@ pub fn prepare_sandbox_run(
             session.apply_live_manifest_update(manifest)?;
         }
         session
+    } else if let Some(session_state) = sandbox_config.session_state {
+        LocalSandboxSession::resume(session_state)?
     } else {
         let manifest = sandbox_config
             .manifest
@@ -628,12 +703,68 @@ pub fn prepare_sandbox_run(
     let prepared_agent = agent.agent.clone_with(|prepared| {
         prepared.instructions = Some(instructions);
         prepared.function_tools.extend(tools);
+        prepared.sandbox_runtime = Some(AgentSandboxRuntime {
+            base_instructions: agent.base_instructions.clone(),
+            user_instructions: agent.agent.instructions.clone(),
+            capabilities: agent.capabilities.clone(),
+            session: session.clone(),
+        });
     });
 
     Ok(PreparedSandboxRun {
         agent: prepared_agent,
         session,
     })
+}
+
+impl AgentSandboxRuntime {
+    pub fn snapshot(&self) -> SandboxRunState {
+        SandboxRunState {
+            base_instructions: self.base_instructions.clone(),
+            user_instructions: self.user_instructions.clone(),
+            capabilities: self.capabilities.clone(),
+            session_state: self.session.session_state(),
+        }
+    }
+}
+
+pub(crate) fn restore_agent_from_run_state(
+    agent: &Agent,
+    state: Option<&SandboxRunState>,
+) -> Result<Agent> {
+    let Some(state) = state else {
+        return Ok(agent.clone());
+    };
+
+    let session = LocalSandboxSession::resume(state.session_state.clone())?;
+    let manifest = session.manifest();
+    let instructions = build_instructions_from_parts(
+        state.base_instructions.as_deref(),
+        state.user_instructions.as_deref(),
+        &state.capabilities,
+        &manifest,
+    );
+    let tools = default_function_tools(session.clone(), &state.capabilities)?;
+
+    Ok(agent.clone_with(|prepared| {
+        prepared.instructions = Some(instructions);
+        prepared.function_tools.retain(|tool| {
+            !matches!(
+                tool.definition.name.as_str(),
+                "sandbox_list_files"
+                    | "sandbox_read_file"
+                    | "sandbox_run_shell"
+                    | "sandbox_apply_patch"
+            )
+        });
+        prepared.function_tools.extend(tools);
+        prepared.sandbox_runtime = Some(AgentSandboxRuntime {
+            base_instructions: state.base_instructions.clone(),
+            user_instructions: state.user_instructions.clone(),
+            capabilities: state.capabilities.clone(),
+            session,
+        });
+    }))
 }
 
 fn create_temp_workspace_root() -> Result<PathBuf> {
@@ -643,17 +774,30 @@ fn create_temp_workspace_root() -> Result<PathBuf> {
 }
 
 fn build_instructions(agent: &SandboxAgent, manifest: &Manifest) -> String {
+    build_instructions_from_parts(
+        agent.base_instructions.as_deref(),
+        agent.agent.instructions.as_deref(),
+        &agent.capabilities,
+        manifest,
+    )
+}
+
+fn build_instructions_from_parts(
+    base_instructions: Option<&str>,
+    user_instructions: Option<&str>,
+    capabilities: &[SandboxCapability],
+    manifest: &Manifest,
+) -> String {
     let mut parts = Vec::new();
-    if let Some(base) = &agent.base_instructions {
-        parts.push(base.clone());
+    if let Some(base) = base_instructions {
+        parts.push(base.to_owned());
     }
-    if let Some(instructions) = &agent.agent.instructions {
-        parts.push(instructions.clone());
+    if let Some(instructions) = user_instructions {
+        parts.push(instructions.to_owned());
     }
     parts.push(format!(
         "Capabilities: {}",
-        agent
-            .capabilities
+        capabilities
             .iter()
             .map(SandboxCapability::as_str)
             .collect::<Vec<_>>()

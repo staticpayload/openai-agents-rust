@@ -1,28 +1,15 @@
 {
   "featureId": "sandbox-capability-subset-followup",
-  "reviewedAt": "2026-04-19T15:03:34Z",
-  "commitId": "7f9e16905d2b5031a5606c7d3668be8534337b93",
+  "reviewedAt": "2026-04-19T15:20:42Z",
+  "commitId": "7f1b3d7b55f8b4ce369efdce35d5aeb5ecf8adb4",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "Fail. Commit `7f9e16905d2b5031a5606c7d3668be8534337b93` fixes the original happy path by making capability instructions and attached sandbox tools line up for unique subsets, and the new filesystem-only regression proves that case. However, the implementation now treats `SandboxAgentBuilder::capabilities()` as a multiset: repeated capabilities emit duplicate fixed-name tools, and the runner rejects duplicate runtime tool names. That means some explicit subset-configured runs still fail before execution, so VAL-SANDBOX-017 is not fully satisfied.",
-    "issues": [
-      {
-        "file": "crates/agents-core/src/sandbox/mod.rs",
-        "line": 123,
-        "severity": "blocking",
-        "description": "`SandboxAgentBuilder::capabilities()` stores an arbitrary `Vec<SandboxCapability>` at `crates/agents-core/src/sandbox/mod.rs:123`, and `default_function_tools()` now iterates that vector and blindly pushes the same fixed-name tools for each matching entry (`crates/agents-core/src/sandbox/mod.rs:626-674`). If a caller repeats a capability such as `SandboxCapability::Filesystem`, the prepared agent gets duplicate `sandbox_list_files` / `sandbox_read_file` definitions. The run then fails when the runner resolves runtime tools because `Agent::get_all_function_tools()` rejects duplicate tool names (`crates/agents-core/src/agent.rs:382`). Capability subsets are set-like API input, so duplicate entries should be normalized or rejected up front instead of turning a subset-configured run into a runtime error."
-      },
-      {
-        "file": "crates/openai-agents/tests/sandbox_semantics.rs",
-        "line": 288,
-        "severity": "non_blocking",
-        "description": "The new regression only exercises the unique happy path via `.capabilities(vec![SandboxCapability::Filesystem])` and checks the resulting tool list for that case. It does not cover duplicate capability input, which is how the new runtime failure is reached, so this edge case can regress unnoticed."
-      }
-    ]
+    "summary": "Pass. The prior blocker is resolved at current HEAD: `SandboxAgentBuilder::capabilities()` now normalizes duplicate capability entries before they can reach runtime tool resolution, `build()` repeats that normalization defensively, and the new regression proves subset-configured runs no longer produce duplicate fixed-name sandbox tools while omitted capabilities remain unavailable.",
+    "issues": []
   },
   "sharedStateObservations": [],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the feature metadata, handoff, transcript skeleton, mission guidance, shared-state docs, and commit `7f9e16905d2b5031a5606c7d3668be8534337b93`. Status: fail. Unique capability subsets now constrain the sandbox tool bundle correctly, but duplicate capability entries produce duplicate fixed-name tools and trigger the runner's duplicate-tool guard, so subset-configured runs are not robust for all accepted builder inputs."
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/local-sandbox-mvp/scrutiny/reviews/sandbox-capability-subset-followup.json",
+  "summary": "Reviewed the prior failed review and synthesis, feature metadata, worker handoff, transcript skeleton, `rust-sandbox-worker`, current sandbox implementation, and commit history through `7f1b3d7b55f8b4ce369efdce35d5aeb5ecf8adb4`. Status: pass. `crates/agents-core/src/sandbox/mod.rs:52-56` adds set-style capability normalization, `crates/agents-core/src/sandbox/mod.rs:133-143` applies it on builder input and again during `build()`, and the subset-specific tool attachment path in `crates/agents-core/src/sandbox/mod.rs:616-674` therefore no longer emits duplicate fixed-name tools. The existing subset regression at `crates/openai-agents/tests/sandbox_semantics.rs:288` still shows omitted capabilities stay absent, and the new duplicate-entry regression at `crates/openai-agents/tests/sandbox_semantics.rs:381` verifies duplicate filesystem/apply_patch inputs yield a unique tool bundle, unique capability instructions, and successful runtime execution, satisfying VAL-SANDBOX-017."
 }

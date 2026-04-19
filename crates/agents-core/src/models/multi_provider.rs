@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::errors::{AgentsError, Result};
+use crate::model_settings::ModelSettings;
 use crate::models::interface::{Model, ModelProvider, ModelRequest, ModelResponse};
 
 #[derive(Clone, Default)]
@@ -120,6 +123,39 @@ impl MultiProvider {
             (None, Some(model_name))
         }
     }
+
+    fn resolve_provider_for_model<'a>(
+        &self,
+        model: Option<&'a str>,
+    ) -> Option<(Arc<dyn ModelProvider>, Option<&'a str>)> {
+        let (prefix, stripped_name) = self.split_model_name(model);
+
+        if let Some(prefix) = prefix {
+            if let Some(provider) = self.provider_map.get_provider(prefix) {
+                return Some((provider, stripped_name));
+            }
+
+            if prefix == "openai" {
+                return Some(match self.openai_prefix_mode {
+                    MultiProviderOpenAIPrefixMode::Alias => {
+                        (self.default_provider.clone(), stripped_name)
+                    }
+                    MultiProviderOpenAIPrefixMode::ModelId => {
+                        (self.default_provider.clone(), model)
+                    }
+                });
+            }
+
+            return match self.unknown_prefix_mode {
+                MultiProviderUnknownPrefixMode::ModelId => {
+                    Some((self.default_provider.clone(), model))
+                }
+                MultiProviderUnknownPrefixMode::Error => None,
+            };
+        }
+
+        Some((self.default_provider.clone(), model))
+    }
 }
 
 struct UnavailableModel {
@@ -135,31 +171,58 @@ impl Model for UnavailableModel {
 
 impl ModelProvider for MultiProvider {
     fn resolve(&self, model: Option<&str>) -> Arc<dyn Model> {
-        let (prefix, stripped_name) = self.split_model_name(model);
-
-        if let Some(prefix) = prefix {
-            if let Some(provider) = self.provider_map.get_provider(prefix) {
-                return provider.resolve(stripped_name);
-            }
-
-            if prefix == "openai" {
-                return match self.openai_prefix_mode {
-                    MultiProviderOpenAIPrefixMode::Alias => {
-                        self.default_provider.resolve(stripped_name)
-                    }
-                    MultiProviderOpenAIPrefixMode::ModelId => self.default_provider.resolve(model),
-                };
-            }
-
-            return match self.unknown_prefix_mode {
-                MultiProviderUnknownPrefixMode::ModelId => self.default_provider.resolve(model),
-                MultiProviderUnknownPrefixMode::Error => Arc::new(UnavailableModel {
-                    message: format!("unknown model provider prefix `{prefix}`"),
-                }),
-            };
+        if let Some((provider, resolved_model)) = self.resolve_provider_for_model(model) {
+            return provider.resolve(resolved_model);
         }
 
-        self.default_provider.resolve(model)
+        let (prefix, _) = self.split_model_name(model);
+        Arc::new(UnavailableModel {
+            message: format!(
+                "unknown model provider prefix `{}`",
+                prefix.unwrap_or("unknown")
+            ),
+        })
+    }
+
+    fn resolve_trace_metadata(
+        &self,
+        model: Option<&str>,
+        metadata: Option<&BTreeMap<String, Value>>,
+    ) -> Option<BTreeMap<String, Value>> {
+        if let Some((provider, resolved_model)) = self.resolve_provider_for_model(model) {
+            return provider.resolve_trace_metadata(resolved_model, metadata);
+        }
+
+        metadata.cloned()
+    }
+
+    fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
+        if let Some((provider, resolved_model)) =
+            self.resolve_provider_for_model(request.model.as_deref())
+        {
+            request.model = resolved_model.map(ToOwned::to_owned);
+            return provider.prepare_request(request);
+        }
+
+        request
+    }
+
+    fn resolve_with_settings(
+        &self,
+        model: Option<&str>,
+        settings: &ModelSettings,
+    ) -> Arc<dyn Model> {
+        if let Some((provider, resolved_model)) = self.resolve_provider_for_model(model) {
+            return provider.resolve_with_settings(resolved_model, settings);
+        }
+
+        let (prefix, _) = self.split_model_name(model);
+        Arc::new(UnavailableModel {
+            message: format!(
+                "unknown model provider prefix `{}`",
+                prefix.unwrap_or("unknown")
+            ),
+        })
     }
 }
 
@@ -396,5 +459,60 @@ mod tests {
 
         let explicit_openai_seen = explicit_openai_capture.seen.lock().expect("seen lock");
         assert_eq!(explicit_openai_seen.as_slice(), &[Some("gpt-5".to_owned())]);
+    }
+
+    #[test]
+    fn forwards_trace_metadata_hooks_through_routed_provider() {
+        #[derive(Clone)]
+        struct HookProvider;
+
+        impl ModelProvider for HookProvider {
+            fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
+                Arc::new(UnavailableModel {
+                    message: "unused".to_owned(),
+                })
+            }
+
+            fn resolve_trace_metadata(
+                &self,
+                _model: Option<&str>,
+                metadata: Option<&BTreeMap<String, Value>>,
+            ) -> Option<BTreeMap<String, Value>> {
+                let mut metadata = metadata.cloned().unwrap_or_default();
+                metadata.insert(
+                    "agent_harness_id".to_owned(),
+                    Value::String("hooked".to_owned()),
+                );
+                Some(metadata)
+            }
+
+            fn prepare_request(&self, mut request: ModelRequest) -> ModelRequest {
+                request.settings.metadata.insert(
+                    "agent_harness_id".to_owned(),
+                    Value::String("hooked".to_owned()),
+                );
+                request
+            }
+        }
+
+        let provider = MultiProvider::new(Arc::new(HookProvider));
+        let trace_metadata = provider
+            .resolve_trace_metadata(Some("openai/gpt-5"), None)
+            .expect("metadata should exist");
+        assert_eq!(
+            trace_metadata.get("agent_harness_id"),
+            Some(&Value::String("hooked".to_owned()))
+        );
+        assert_eq!(
+            provider
+                .prepare_request(ModelRequest {
+                    model: Some("openai/gpt-5".to_owned()),
+                    ..Default::default()
+                })
+                .settings
+                .metadata
+                .get("agent_harness_id"),
+            Some(&Value::String("hooked".to_owned()))
+        );
     }
 }

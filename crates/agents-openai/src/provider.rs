@@ -184,6 +184,7 @@ impl OpenAIProvider {
 impl ModelProvider for OpenAIProvider {
     fn resolve_trace_metadata(
         &self,
+        _model: Option<&str>,
         metadata: Option<&BTreeMap<String, Value>>,
     ) -> Option<BTreeMap<String, Value>> {
         merge_openai_harness_id_into_metadata(metadata, self.effective_harness_id().as_deref())
@@ -447,7 +448,7 @@ mod tests {
         );
         assert_eq!(
             default_provider
-                .resolve_trace_metadata(None)
+                .resolve_trace_metadata(None, None)
                 .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
             Some(json!("default-harness"))
         );
@@ -477,13 +478,16 @@ mod tests {
         );
         assert_eq!(
             provider
-                .resolve_trace_metadata(Some(&BTreeMap::from([
-                    (
-                        OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
-                        json!("explicit-harness"),
-                    ),
-                    ("source".to_owned(), json!("test")),
-                ])))
+                .resolve_trace_metadata(
+                    None,
+                    Some(&BTreeMap::from([
+                        (
+                            OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
+                            json!("explicit-harness"),
+                        ),
+                        ("source".to_owned(), json!("test")),
+                    ])),
+                )
                 .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
             Some(json!("explicit-harness"))
         );

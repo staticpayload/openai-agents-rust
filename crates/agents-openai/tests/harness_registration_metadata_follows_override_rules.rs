@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 use std::env;
 use std::sync::{Mutex, OnceLock};
 
-use agents_core::{ModelProvider, ModelRequest};
+use std::sync::Arc;
+
+use agents_core::{ModelProvider, ModelRequest, MultiProvider};
 use agents_openai::{
     OPENAI_AGENT_HARNESS_ID_ENV_VAR, OPENAI_HARNESS_ID_TRACE_METADATA_KEY,
     OpenAIAgentRegistrationConfig, OpenAIProvider, get_default_openai_agent_registration,
@@ -50,7 +52,7 @@ fn harness_registration_metadata_follows_override_rules() {
     );
     assert_eq!(
         default_provider
-            .resolve_trace_metadata(None)
+            .resolve_trace_metadata(None, None)
             .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
         Some(json!("default-harness"))
     );
@@ -79,13 +81,16 @@ fn harness_registration_metadata_follows_override_rules() {
     );
     assert_eq!(
         provider
-            .resolve_trace_metadata(Some(&BTreeMap::from([
-                (
-                    OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
-                    json!("explicit-harness"),
-                ),
-                ("source".to_owned(), json!("test")),
-            ])))
+            .resolve_trace_metadata(
+                None,
+                Some(&BTreeMap::from([
+                    (
+                        OPENAI_HARNESS_ID_TRACE_METADATA_KEY.to_owned(),
+                        json!("explicit-harness"),
+                    ),
+                    ("source".to_owned(), json!("test")),
+                ])),
+            )
             .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
         Some(json!("explicit-harness"))
     );
@@ -105,5 +110,30 @@ fn harness_registration_metadata_follows_override_rules() {
             .metadata
             .get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY),
         Some(&json!("explicit-harness"))
+    );
+
+    let routed = MultiProvider::new(Arc::new(provider));
+    assert_eq!(
+        routed
+            .resolve_trace_metadata(
+                Some("openai/gpt-5"),
+                Some(&BTreeMap::from([(
+                    "source".to_owned(),
+                    json!("multiprovider")
+                )])),
+            )
+            .and_then(|metadata| metadata.get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY).cloned()),
+        Some(json!("provider-harness"))
+    );
+    assert_eq!(
+        routed
+            .prepare_request(ModelRequest {
+                model: Some("openai/gpt-5".to_owned()),
+                ..Default::default()
+            })
+            .settings
+            .metadata
+            .get(OPENAI_HARNESS_ID_TRACE_METADATA_KEY),
+        Some(&json!("provider-harness"))
     );
 }

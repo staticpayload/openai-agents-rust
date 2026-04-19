@@ -114,6 +114,7 @@ pub trait ModelProvider: Send + Sync {
 
     fn resolve_trace_metadata(
         &self,
+        _model: Option<&str>,
         metadata: Option<&BTreeMap<String, Value>>,
     ) -> Option<BTreeMap<String, Value>> {
         metadata.cloned()

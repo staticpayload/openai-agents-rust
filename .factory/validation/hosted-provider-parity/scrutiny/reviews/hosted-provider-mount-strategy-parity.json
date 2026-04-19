@@ -1,0 +1,28 @@
+{
+  "featureId": "hosted-provider-mount-strategy-parity",
+  "reviewedAt": "2026-04-19T18:17:12.570590Z",
+  "commitId": "147679b06ebc47fd98be42b8a09728782d464140",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. Commit `147679b` added a substantial hosted-provider mount payload layer and the handoff/transcript show the intended targeted test plus workspace validation were run. However, the current GCS mapping for the rclone-backed providers (E2B, Daytona, Runloop) does not preserve the upstream auth-mode semantics: it forwards HMAC and native GCS auth fields together instead of choosing one mode or rejecting the combination, so some invalid/ambiguous inputs do not fail clearly.",
+    "issues": [
+      {
+        "file": "crates/agents-extensions/src/sandbox/__init__.rs",
+        "line": 458,
+        "severity": "blocking",
+        "description": "`build_rclone_gcs_payload()` always copies every GCS auth field into the payload: HMAC credentials (`access_id`/`secret_access_key`) become `credentials`, while `service_account_credentials` and `access_token` are also forwarded unchanged. For E2B/Daytona/Runloop this means a mount that supplies both HMAC and native GCS auth produces one payload containing both auth modes at once, instead of following the upstream split behavior (HMAC uses the S3-compatible path; native auth uses the GCS path) or rejecting the unsupported combination. That violates the feature requirement that unsupported auth combinations fail clearly and means the generated payload is not a faithful provider-native config for mixed-auth GCS mounts."
+      },
+      {
+        "file": "crates/openai-agents/tests/sandbox_hosted_provider_semantics.rs",
+        "line": 435,
+        "severity": "non_blocking",
+        "description": "The mount-strategy regression test exercises a GCS access-token case for Daytona and basic happy-path/error cases, but it never covers mixed-auth GCS inputs for the rclone-backed providers. Because there is no case with both HMAC and native GCS auth present, the ambiguous payload behavior above can slip through while the suite still passes."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the feature record, mission docs, AGENTS/services/architecture guidance, the worker handoff, the transcript skeleton, commit `147679b`, and the current hosted mount implementation/tests. The feature landed in `147679b`, but the current rclone-backed GCS mount mapping still accepts ambiguous mixed-auth input instead of normalizing or rejecting it, so I marked the review as fail with one blocking implementation issue and one related test-gap note."
+}

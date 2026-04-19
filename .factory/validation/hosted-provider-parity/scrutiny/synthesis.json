@@ -1,0 +1,60 @@
+{
+  "milestone": "hosted-provider-parity",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace -- --test-threads=5",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 0,
+    "failed": 3,
+    "failedFeatures": [
+      "hosted-provider-feature-gates-and-public-exports",
+      "hosted-provider-session-auth-and-capability-parity",
+      "hosted-provider-mount-strategy-parity"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "hosted-provider-feature-gates-and-public-exports",
+      "severity": "blocking",
+      "description": "The hosted-provider public surface is no longer feature-gated: `crates/agents-extensions/src/sandbox/__init__.rs` unconditionally defines and re-exports all hosted provider symbols, so the provider feature flags in the extensions and facade manifests no longer isolate the public export surface."
+    },
+    {
+      "featureId": "hosted-provider-session-auth-and-capability-parity",
+      "severity": "blocking",
+      "description": "Hosted providers that support PTY currently report `supports_pty()` only when the session state has `interactive_pty = true`, so PTY capability depends on a prior request flag instead of backend support and violates the preserved-capability contract."
+    },
+    {
+      "featureId": "hosted-provider-mount-strategy-parity",
+      "severity": "blocking",
+      "description": "The rclone-backed GCS mount builder forwards HMAC and native GCS auth fields together instead of choosing one auth mode or rejecting the combination, so mixed-auth inputs do not fail clearly and do not match provider-native mapping semantics."
+    }
+  ],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "skills",
+      "suggestion": "Update `rust-sandbox-worker` to explicitly allow a compile-surface/public-export feature to establish the minimal gated API surface before finalizing a temp-crate or compile-matrix verification test when the test itself depends on the exported symbol names.",
+      "evidence": "The review for `hosted-provider-feature-gates-and-public-exports` found the worker had to sketch the gated public symbol names first and only then finalize the feature-matrix verification, and the handoff recorded that as a deviation from the skill's current test-first procedure.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [],
+  "previousRound": null
+}

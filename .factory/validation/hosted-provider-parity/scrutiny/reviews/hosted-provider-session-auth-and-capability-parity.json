@@ -1,0 +1,28 @@
+{
+  "featureId": "hosted-provider-session-auth-and-capability-parity",
+  "reviewedAt": "2026-04-19T18:23:00Z",
+  "commitId": "1b431ebb26ad7e5ecd2054f852bfe6fe5f9b1b34",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. Commit `1b431eb` landed the mocked hosted-provider create/resume and auth/state/capability slice, and the transcript/handoff show the intended targeted tests and workspace-wide validation were run. However, the current PTY-capability reporting does not match the feature contract: supported providers only report PTY support when the session was created with `interactive_pty = true`, so capability preservation is tied to a prior request flag instead of the backend's actual support.",
+    "issues": [
+      {
+        "file": "crates/agents-extensions/src/sandbox/__init__.rs",
+        "line": 1183,
+        "severity": "blocking",
+        "description": "`supports_pty()` returns `SPEC.supports_pty && self.state.interactive_pty`, which means E2B, Daytona, Blaxel, and Cloudflare sessions created without requesting interactive PTY incorrectly report that PTY is unsupported. Upstream hosted-provider sessions expose PTY support based on backend capability (for example E2B/Daytona/Cloudflare return `true` regardless of the initial interactive flag), so this violates the feature's expected behavior that supported providers preserve PTY capability flags while unsupported providers fail clearly."
+      },
+      {
+        "file": "crates/openai-agents/tests/sandbox_hosted_provider_semantics.rs",
+        "line": 240,
+        "severity": "non_blocking",
+        "description": "The capability regression test only asserts `supports_pty()` for an E2B session created with `interactive_pty: true` and for a Vercel session that is always unsupported. It never checks a PTY-capable provider created with default/non-interactive options, so the false-negative capability report above slips through."
+      }
+    ]
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed the mission feature record, AGENTS/services/architecture guidance, worker handoff, transcript skeleton, and commit `1b431eb`, then inspected the current hosted-provider sandbox implementation and tests. The feature landed in `1b431eb`, but the current PTY-capability contract is wrong for supported providers because `supports_pty()` is gated by the session's `interactive_pty` state instead of backend support, so I marked the review as fail with one blocking issue and one related test-gap note."
+}

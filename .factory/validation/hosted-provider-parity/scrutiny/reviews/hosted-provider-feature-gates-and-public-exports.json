@@ -1,0 +1,34 @@
+{
+  "featureId": "hosted-provider-feature-gates-and-public-exports",
+  "reviewedAt": "2026-04-19T18:10:19.205359+00:00",
+  "commitId": "361ac94cb193eb28ffd5594197457a19ba1d0965",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "Fail. Commit 361ac94 correctly introduced gated hosted-provider exports, but the current implementation no longer preserves the feature-gating contract this feature was meant to establish. The provider symbols in `agents-extensions::sandbox` are now instantiated and re-exported unconditionally, so the Cargo features declared in the extensions crate and facade no longer gate the public surface; the existing feature-matrix test only checks positive imports with each feature enabled and does not catch that regression.",
+    "issues": [
+      {
+        "file": "crates/agents-extensions/src/sandbox/__init__.rs",
+        "line": 1193,
+        "severity": "blocking",
+        "description": "The hosted-provider public surface is no longer feature-gated. `define_hosted_sandbox_provider!` is invoked unconditionally for all seven providers and each invocation ends with an unconditional `pub use`, so consumers can import every hosted sandbox client/session/state type even when no provider feature is enabled. That regresses the feature's stated goal to add hosted provider feature gates and makes the `[features]` entries in `crates/agents-extensions/Cargo.toml:19-27` and `crates/openai-agents/Cargo.toml:19-27` ineffective for export isolation."
+      },
+      {
+        "file": "crates/openai-agents/tests/sandbox_hosted_provider_semantics.rs",
+        "line": 23,
+        "severity": "non_blocking",
+        "description": "The compile-matrix test only checks that imports succeed when each provider feature is explicitly enabled (`default-features = false, features = [\"{feature}\"]` at lines 558-559). It never asserts that the same imports fail without the feature, so the regression above can slip through while the suite still passes."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "skills",
+      "observation": "`rust-sandbox-worker`'s 'write failing tests first' step did not fit this compile-surface feature cleanly. The worker's transcript and handoff show they had to sketch the gated public symbol names first, then finalize the feature-matrix test. The skill should explicitly allow establishing the minimal gated API surface before the compile-check test when the test itself depends on the final export names.",
+      "evidence": "Handoff `.../handoffs/2026-04-19T17-49-30-826Z__hosted-provider-feature-gates-and-public-exports__84e0cff4-18ac-4727-85ab-42dab38bb2ec.json` records `skillFeedback.followedProcedure = false` for step 3 with the rationale that the public surface and feature names had to exist before the temp-crate verification could be written; the transcript skeleton shows the worker created the module/feature wiring before finishing the new test."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Reviewed mission metadata, AGENTS/services/library guidance, the worker handoff and transcript skeleton, commit 361ac94, and the current hosted-provider sandbox export/test files. The original feature landed in commit 361ac94, but the current `agents-extensions::sandbox` implementation has since lost its `#[cfg(feature = ...)]` gating, so the hosted-provider export surface is no longer actually feature-gated. I wrote a failing scrutiny report with one blocking issue for the missing gates and one secondary test-gap note."
+}

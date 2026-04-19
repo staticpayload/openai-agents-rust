@@ -27,6 +27,7 @@ None.
 5. Implement only after the new/updated tests fail for the intended reason when the feature actually requires code changes.
 6. Re-run the targeted tests until they pass, then run broader validation from `.factory/services.yaml` appropriate to the blast radius:
    - always run the narrowest relevant `cargo test ...`
+   - when using `cargo test <filter> -- --exact`, confirm the output shows the intended test actually ran; a zero-match exact filter can still exit 0
    - run `cargo check --workspace` for public API or cross-crate changes
    - run `cargo build --workspace --examples` if examples or facade imports are affected
 7. Perform one manual shell verification when behavior is user-visible from the public facade and there is a stable shell path to exercise it (for example: temp Cargo project import, example build, or targeted `cargo run` smoke). If you intentionally rely on automated cargo validation only, say so explicitly in the handoff and explain why a manual shell check was not the right tool for that feature.

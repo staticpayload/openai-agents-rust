@@ -61,6 +61,830 @@ impl std::error::Error for HostedSandboxError {}
 
 type HostedSandboxResult<T> = std::result::Result<T, HostedSandboxError>;
 
+fn default_read_only() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostedBucketProvider {
+    S3,
+    R2,
+    Gcs,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostedAccessKeyCredentials {
+    pub access_key_id: String,
+    pub secret_access_key: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type")]
+pub enum HostedMountStrategy {
+    #[serde(rename = "e2b_cloud_bucket")]
+    E2bCloudBucket,
+    #[serde(rename = "modal_cloud_bucket")]
+    ModalCloudBucket {
+        #[serde(default)]
+        secret_name: Option<String>,
+        #[serde(default)]
+        secret_environment_name: Option<String>,
+    },
+    #[serde(rename = "daytona_cloud_bucket")]
+    DaytonaCloudBucket,
+    #[serde(rename = "blaxel_cloud_bucket")]
+    BlaxelCloudBucket,
+    #[serde(rename = "cloudflare_bucket_mount")]
+    CloudflareBucketMount,
+    #[serde(rename = "runloop_cloud_bucket")]
+    RunloopCloudBucket,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostedS3Mount {
+    pub bucket: String,
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default = "default_read_only")]
+    pub read_only: bool,
+    #[serde(default)]
+    pub mount_path: Option<String>,
+    pub mount_strategy: HostedMountStrategy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostedR2Mount {
+    pub bucket: String,
+    pub account_id: String,
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub custom_domain: Option<String>,
+    #[serde(default = "default_read_only")]
+    pub read_only: bool,
+    #[serde(default)]
+    pub mount_path: Option<String>,
+    pub mount_strategy: HostedMountStrategy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostedGcsMount {
+    pub bucket: String,
+    #[serde(default)]
+    pub access_id: Option<String>,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub service_account_credentials: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    #[serde(default = "default_read_only")]
+    pub read_only: bool,
+    #[serde(default)]
+    pub mount_path: Option<String>,
+    pub mount_strategy: HostedMountStrategy,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type")]
+pub enum HostedMountEntry {
+    #[serde(rename = "s3_mount")]
+    S3Mount(HostedS3Mount),
+    #[serde(rename = "r2_mount")]
+    R2Mount(HostedR2Mount),
+    #[serde(rename = "gcs_mount")]
+    GcsMount(HostedGcsMount),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HostedRcloneMountPayload {
+    pub provider: HostedBucketProvider,
+    pub strategy: String,
+    pub bucket: String,
+    pub remote_path: String,
+    pub mount_path: String,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub credentials: Option<HostedAccessKeyCredentials>,
+    #[serde(default)]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub service_account_credentials: Option<String>,
+    #[serde(default)]
+    pub access_token: Option<String>,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ModalCloudBucketMountPayload {
+    pub bucket_name: String,
+    #[serde(default)]
+    pub bucket_endpoint_url: Option<String>,
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    #[serde(default)]
+    pub credentials: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    pub secret_name: Option<String>,
+    #[serde(default)]
+    pub secret_environment_name: Option<String>,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BlaxelCloudBucketMountPayload {
+    pub provider: HostedBucketProvider,
+    pub bucket: String,
+    pub mount_path: String,
+    pub read_only: bool,
+    #[serde(default)]
+    pub access_key_id: Option<String>,
+    #[serde(default)]
+    pub secret_access_key: Option<String>,
+    #[serde(default)]
+    pub session_token: Option<String>,
+    #[serde(default)]
+    pub region: Option<String>,
+    #[serde(default)]
+    pub endpoint_url: Option<String>,
+    #[serde(default)]
+    pub prefix: Option<String>,
+    #[serde(default)]
+    pub service_account_key: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CloudflareBucketMountPayload {
+    pub bucket_name: String,
+    pub bucket_endpoint_url: String,
+    pub provider: HostedBucketProvider,
+    #[serde(default)]
+    pub key_prefix: Option<String>,
+    #[serde(default)]
+    pub credentials: Option<HostedAccessKeyCredentials>,
+    pub read_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "provider")]
+pub enum HostedProviderMountPayload {
+    #[serde(rename = "e2b")]
+    E2b { config: HostedRcloneMountPayload },
+    #[serde(rename = "modal")]
+    Modal {
+        config: ModalCloudBucketMountPayload,
+    },
+    #[serde(rename = "daytona")]
+    Daytona { config: HostedRcloneMountPayload },
+    #[serde(rename = "blaxel")]
+    Blaxel {
+        config: BlaxelCloudBucketMountPayload,
+    },
+    #[serde(rename = "cloudflare")]
+    Cloudflare {
+        config: CloudflareBucketMountPayload,
+    },
+    #[serde(rename = "runloop")]
+    Runloop { config: HostedRcloneMountPayload },
+}
+
+impl HostedMountEntry {
+    pub fn resolve_provider_payload(&self) -> HostedSandboxResult<HostedProviderMountPayload> {
+        match self {
+            Self::S3Mount(mount) => mount.mount_strategy.resolve_s3_payload(mount),
+            Self::R2Mount(mount) => mount.mount_strategy.resolve_r2_payload(mount),
+            Self::GcsMount(mount) => mount.mount_strategy.resolve_gcs_payload(mount),
+        }
+    }
+}
+
+impl HostedMountStrategy {
+    fn resolve_s3_payload(
+        &self,
+        mount: &HostedS3Mount,
+    ) -> HostedSandboxResult<HostedProviderMountPayload> {
+        validate_access_key_pair(
+            "s3 mounts",
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        )?;
+        if mount.session_token.is_some()
+            && (mount.access_key_id.is_none() || mount.secret_access_key.is_none())
+        {
+            return Err(HostedSandboxError::new(
+                "s3 mounts require access_key_id and secret_access_key when session_token is set",
+            ));
+        }
+
+        match self {
+            Self::E2bCloudBucket => Ok(HostedProviderMountPayload::E2b {
+                config: build_rclone_s3_payload("e2b_cloud_bucket", mount),
+            }),
+            Self::ModalCloudBucket {
+                secret_name,
+                secret_environment_name,
+            } => Ok(HostedProviderMountPayload::Modal {
+                config: build_modal_s3_payload(
+                    mount,
+                    secret_name.clone(),
+                    secret_environment_name.clone(),
+                )?,
+            }),
+            Self::DaytonaCloudBucket => Ok(HostedProviderMountPayload::Daytona {
+                config: build_rclone_s3_payload("daytona_cloud_bucket", mount),
+            }),
+            Self::BlaxelCloudBucket => Ok(HostedProviderMountPayload::Blaxel {
+                config: build_blaxel_s3_payload(mount),
+            }),
+            Self::CloudflareBucketMount => Ok(HostedProviderMountPayload::Cloudflare {
+                config: build_cloudflare_s3_payload(mount)?,
+            }),
+            Self::RunloopCloudBucket => Ok(HostedProviderMountPayload::Runloop {
+                config: build_rclone_s3_payload("runloop_cloud_bucket", mount),
+            }),
+        }
+    }
+
+    fn resolve_r2_payload(
+        &self,
+        mount: &HostedR2Mount,
+    ) -> HostedSandboxResult<HostedProviderMountPayload> {
+        validate_access_key_pair(
+            "r2 credentials",
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        )?;
+
+        match self {
+            Self::E2bCloudBucket => Ok(HostedProviderMountPayload::E2b {
+                config: build_rclone_r2_payload("e2b_cloud_bucket", mount),
+            }),
+            Self::ModalCloudBucket {
+                secret_name,
+                secret_environment_name,
+            } => Ok(HostedProviderMountPayload::Modal {
+                config: build_modal_r2_payload(
+                    mount,
+                    secret_name.clone(),
+                    secret_environment_name.clone(),
+                )?,
+            }),
+            Self::DaytonaCloudBucket => Ok(HostedProviderMountPayload::Daytona {
+                config: build_rclone_r2_payload("daytona_cloud_bucket", mount),
+            }),
+            Self::BlaxelCloudBucket => Ok(HostedProviderMountPayload::Blaxel {
+                config: build_blaxel_r2_payload(mount),
+            }),
+            Self::CloudflareBucketMount => Ok(HostedProviderMountPayload::Cloudflare {
+                config: build_cloudflare_r2_payload(mount),
+            }),
+            Self::RunloopCloudBucket => Ok(HostedProviderMountPayload::Runloop {
+                config: build_rclone_r2_payload("runloop_cloud_bucket", mount),
+            }),
+        }
+    }
+
+    fn resolve_gcs_payload(
+        &self,
+        mount: &HostedGcsMount,
+    ) -> HostedSandboxResult<HostedProviderMountPayload> {
+        validate_access_key_pair(
+            "gcs hmac credentials",
+            mount.access_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        )?;
+
+        match self {
+            Self::E2bCloudBucket => Ok(HostedProviderMountPayload::E2b {
+                config: build_rclone_gcs_payload("e2b_cloud_bucket", mount),
+            }),
+            Self::ModalCloudBucket {
+                secret_name,
+                secret_environment_name,
+            } => Ok(HostedProviderMountPayload::Modal {
+                config: build_modal_gcs_payload(
+                    mount,
+                    secret_name.clone(),
+                    secret_environment_name.clone(),
+                )?,
+            }),
+            Self::DaytonaCloudBucket => Ok(HostedProviderMountPayload::Daytona {
+                config: build_rclone_gcs_payload("daytona_cloud_bucket", mount),
+            }),
+            Self::BlaxelCloudBucket => Ok(HostedProviderMountPayload::Blaxel {
+                config: build_blaxel_gcs_payload(mount)?,
+            }),
+            Self::CloudflareBucketMount => Ok(HostedProviderMountPayload::Cloudflare {
+                config: build_cloudflare_gcs_payload(mount)?,
+            }),
+            Self::RunloopCloudBucket => Ok(HostedProviderMountPayload::Runloop {
+                config: build_rclone_gcs_payload("runloop_cloud_bucket", mount),
+            }),
+        }
+    }
+}
+
+fn build_rclone_s3_payload(strategy: &str, mount: &HostedS3Mount) -> HostedRcloneMountPayload {
+    HostedRcloneMountPayload {
+        provider: HostedBucketProvider::S3,
+        strategy: strategy.to_owned(),
+        bucket: mount.bucket.clone(),
+        remote_path: join_remote_path(&mount.bucket, mount.prefix.as_deref()),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        endpoint_url: mount.endpoint_url.clone(),
+        region: mount.region.clone(),
+        credentials: build_access_key_credentials(
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        session_token: mount.session_token.clone(),
+        service_account_credentials: None,
+        access_token: None,
+        read_only: mount.read_only,
+    }
+}
+
+fn build_rclone_r2_payload(strategy: &str, mount: &HostedR2Mount) -> HostedRcloneMountPayload {
+    HostedRcloneMountPayload {
+        provider: HostedBucketProvider::R2,
+        strategy: strategy.to_owned(),
+        bucket: mount.bucket.clone(),
+        remote_path: mount.bucket.clone(),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        endpoint_url: Some(r2_endpoint(
+            &mount.account_id,
+            mount.custom_domain.as_deref(),
+        )),
+        region: None,
+        credentials: build_access_key_credentials(
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        session_token: None,
+        service_account_credentials: None,
+        access_token: None,
+        read_only: mount.read_only,
+    }
+}
+
+fn build_rclone_gcs_payload(strategy: &str, mount: &HostedGcsMount) -> HostedRcloneMountPayload {
+    HostedRcloneMountPayload {
+        provider: HostedBucketProvider::Gcs,
+        strategy: strategy.to_owned(),
+        bucket: mount.bucket.clone(),
+        remote_path: join_remote_path(&mount.bucket, mount.prefix.as_deref()),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        endpoint_url: Some(
+            mount
+                .endpoint_url
+                .clone()
+                .unwrap_or_else(|| "https://storage.googleapis.com".to_owned()),
+        ),
+        region: mount.region.clone(),
+        credentials: build_access_key_credentials(
+            mount.access_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        session_token: None,
+        service_account_credentials: mount.service_account_credentials.clone(),
+        access_token: mount.access_token.clone(),
+        read_only: mount.read_only,
+    }
+}
+
+fn build_modal_s3_payload(
+    mount: &HostedS3Mount,
+    secret_name: Option<String>,
+    secret_environment_name: Option<String>,
+) -> HostedSandboxResult<ModalCloudBucketMountPayload> {
+    validate_modal_secret_fields(
+        secret_name.as_deref(),
+        secret_environment_name.as_deref(),
+        "s3_mount",
+    )?;
+    if secret_name.is_some()
+        && (mount.access_key_id.is_some()
+            || mount.secret_access_key.is_some()
+            || mount.session_token.is_some())
+    {
+        return Err(HostedSandboxError::new(
+            "modal cloud bucket mounts do not support both inline credentials and secret_name",
+        ));
+    }
+
+    let mut credentials = serde_json::Map::new();
+    if let Some(value) = &mount.access_key_id {
+        credentials.insert(
+            "AWS_ACCESS_KEY_ID".to_owned(),
+            serde_json::Value::String(value.clone()),
+        );
+    }
+    if let Some(value) = &mount.secret_access_key {
+        credentials.insert(
+            "AWS_SECRET_ACCESS_KEY".to_owned(),
+            serde_json::Value::String(value.clone()),
+        );
+    }
+    if let Some(value) = &mount.session_token {
+        credentials.insert(
+            "AWS_SESSION_TOKEN".to_owned(),
+            serde_json::Value::String(value.clone()),
+        );
+    }
+
+    Ok(ModalCloudBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: mount.endpoint_url.clone(),
+        key_prefix: mount.prefix.clone(),
+        credentials: (!credentials.is_empty()).then_some(credentials),
+        secret_name,
+        secret_environment_name,
+        read_only: mount.read_only,
+    })
+}
+
+fn build_modal_r2_payload(
+    mount: &HostedR2Mount,
+    secret_name: Option<String>,
+    secret_environment_name: Option<String>,
+) -> HostedSandboxResult<ModalCloudBucketMountPayload> {
+    validate_modal_secret_fields(
+        secret_name.as_deref(),
+        secret_environment_name.as_deref(),
+        "r2_mount",
+    )?;
+    if secret_name.is_some() && mount.access_key_id.is_some() {
+        return Err(HostedSandboxError::new(
+            "modal cloud bucket mounts do not support both inline credentials and secret_name",
+        ));
+    }
+
+    let mut credentials = serde_json::Map::new();
+    if let Some(value) = &mount.access_key_id {
+        credentials.insert(
+            "AWS_ACCESS_KEY_ID".to_owned(),
+            serde_json::Value::String(value.clone()),
+        );
+    }
+    if let Some(value) = &mount.secret_access_key {
+        credentials.insert(
+            "AWS_SECRET_ACCESS_KEY".to_owned(),
+            serde_json::Value::String(value.clone()),
+        );
+    }
+
+    Ok(ModalCloudBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: Some(r2_endpoint(
+            &mount.account_id,
+            mount.custom_domain.as_deref(),
+        )),
+        key_prefix: None,
+        credentials: (!credentials.is_empty()).then_some(credentials),
+        secret_name,
+        secret_environment_name,
+        read_only: mount.read_only,
+    })
+}
+
+fn build_modal_gcs_payload(
+    mount: &HostedGcsMount,
+    secret_name: Option<String>,
+    secret_environment_name: Option<String>,
+) -> HostedSandboxResult<ModalCloudBucketMountPayload> {
+    validate_modal_secret_fields(
+        secret_name.as_deref(),
+        secret_environment_name.as_deref(),
+        "gcs_mount",
+    )?;
+    let using_hmac = mount.access_id.is_some() && mount.secret_access_key.is_some();
+    if !using_hmac && secret_name.is_none() {
+        return Err(HostedSandboxError::new(
+            "gcs modal cloud bucket mounts require access_id and secret_access_key",
+        ));
+    }
+    if secret_name.is_some()
+        && (mount.access_id.is_some()
+            || mount.secret_access_key.is_some()
+            || mount.service_account_credentials.is_some()
+            || mount.access_token.is_some())
+    {
+        return Err(HostedSandboxError::new(
+            "modal cloud bucket mounts do not support both inline credentials and secret_name",
+        ));
+    }
+    if mount.service_account_credentials.is_some() || mount.access_token.is_some() {
+        return Err(HostedSandboxError::new(
+            "gcs modal cloud bucket mounts require access_id and secret_access_key",
+        ));
+    }
+
+    let credentials = using_hmac.then(|| {
+        let mut map = serde_json::Map::new();
+        map.insert(
+            "GOOGLE_ACCESS_KEY_ID".to_owned(),
+            serde_json::Value::String(mount.access_id.clone().expect("access_id should exist")),
+        );
+        map.insert(
+            "GOOGLE_ACCESS_KEY_SECRET".to_owned(),
+            serde_json::Value::String(
+                mount
+                    .secret_access_key
+                    .clone()
+                    .expect("secret_access_key should exist"),
+            ),
+        );
+        map
+    });
+
+    Ok(ModalCloudBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: Some(
+            mount
+                .endpoint_url
+                .clone()
+                .unwrap_or_else(|| "https://storage.googleapis.com".to_owned()),
+        ),
+        key_prefix: mount.prefix.clone(),
+        credentials,
+        secret_name,
+        secret_environment_name,
+        read_only: mount.read_only,
+    })
+}
+
+fn build_blaxel_s3_payload(mount: &HostedS3Mount) -> BlaxelCloudBucketMountPayload {
+    BlaxelCloudBucketMountPayload {
+        provider: HostedBucketProvider::S3,
+        bucket: mount.bucket.clone(),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        read_only: mount.read_only,
+        access_key_id: mount.access_key_id.clone(),
+        secret_access_key: mount.secret_access_key.clone(),
+        session_token: mount.session_token.clone(),
+        region: mount.region.clone(),
+        endpoint_url: mount.endpoint_url.clone(),
+        prefix: mount.prefix.clone(),
+        service_account_key: None,
+    }
+}
+
+fn build_blaxel_r2_payload(mount: &HostedR2Mount) -> BlaxelCloudBucketMountPayload {
+    BlaxelCloudBucketMountPayload {
+        provider: HostedBucketProvider::R2,
+        bucket: mount.bucket.clone(),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        read_only: mount.read_only,
+        access_key_id: mount.access_key_id.clone(),
+        secret_access_key: mount.secret_access_key.clone(),
+        session_token: None,
+        region: None,
+        endpoint_url: Some(r2_endpoint(
+            &mount.account_id,
+            mount.custom_domain.as_deref(),
+        )),
+        prefix: None,
+        service_account_key: None,
+    }
+}
+
+fn build_blaxel_gcs_payload(
+    mount: &HostedGcsMount,
+) -> HostedSandboxResult<BlaxelCloudBucketMountPayload> {
+    let using_hmac = mount.access_id.is_some() && mount.secret_access_key.is_some();
+    if using_hmac && mount.service_account_credentials.is_some() {
+        return Err(HostedSandboxError::new(
+            "blaxel cloud bucket mounts do not support both hmac and service_account_credentials",
+        ));
+    }
+    if mount.access_token.is_some() {
+        return Err(HostedSandboxError::new(
+            "blaxel cloud bucket mounts do not support gcs access_token credentials",
+        ));
+    }
+
+    Ok(BlaxelCloudBucketMountPayload {
+        provider: if using_hmac {
+            HostedBucketProvider::S3
+        } else {
+            HostedBucketProvider::Gcs
+        },
+        bucket: mount.bucket.clone(),
+        mount_path: mount
+            .mount_path
+            .clone()
+            .unwrap_or_else(|| "/workspace".to_owned()),
+        read_only: mount.read_only,
+        access_key_id: mount.access_id.clone(),
+        secret_access_key: mount.secret_access_key.clone(),
+        session_token: None,
+        region: mount.region.clone(),
+        endpoint_url: if using_hmac {
+            Some(
+                mount
+                    .endpoint_url
+                    .clone()
+                    .unwrap_or_else(|| "https://storage.googleapis.com".to_owned()),
+            )
+        } else {
+            None
+        },
+        prefix: mount.prefix.clone(),
+        service_account_key: if using_hmac {
+            None
+        } else {
+            mount.service_account_credentials.clone()
+        },
+    })
+}
+
+fn build_cloudflare_s3_payload(
+    mount: &HostedS3Mount,
+) -> HostedSandboxResult<CloudflareBucketMountPayload> {
+    if mount.session_token.is_some() {
+        return Err(HostedSandboxError::new(
+            "cloudflare bucket mounts do not support s3 session_token credentials",
+        ));
+    }
+    Ok(CloudflareBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: mount.endpoint_url.clone().unwrap_or_else(|| {
+            mount
+                .region
+                .as_ref()
+                .map(|region| format!("https://s3.{region}.amazonaws.com"))
+                .unwrap_or_else(|| "https://s3.amazonaws.com".to_owned())
+        }),
+        provider: HostedBucketProvider::S3,
+        key_prefix: normalize_cloudflare_prefix(mount.prefix.as_deref()),
+        credentials: build_access_key_credentials(
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        read_only: mount.read_only,
+    })
+}
+
+fn build_cloudflare_r2_payload(mount: &HostedR2Mount) -> CloudflareBucketMountPayload {
+    CloudflareBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: r2_endpoint(&mount.account_id, mount.custom_domain.as_deref()),
+        provider: HostedBucketProvider::R2,
+        key_prefix: None,
+        credentials: build_access_key_credentials(
+            mount.access_key_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        read_only: mount.read_only,
+    }
+}
+
+fn build_cloudflare_gcs_payload(
+    mount: &HostedGcsMount,
+) -> HostedSandboxResult<CloudflareBucketMountPayload> {
+    let using_hmac = mount.access_id.is_some() && mount.secret_access_key.is_some();
+    if !using_hmac {
+        return Err(HostedSandboxError::new(
+            "gcs cloudflare bucket mounts require access_id and secret_access_key",
+        ));
+    }
+    if mount.service_account_credentials.is_some() || mount.access_token.is_some() {
+        return Err(HostedSandboxError::new(
+            "gcs cloudflare bucket mounts require access_id and secret_access_key",
+        ));
+    }
+    Ok(CloudflareBucketMountPayload {
+        bucket_name: mount.bucket.clone(),
+        bucket_endpoint_url: mount
+            .endpoint_url
+            .clone()
+            .unwrap_or_else(|| "https://storage.googleapis.com".to_owned()),
+        provider: HostedBucketProvider::Gcs,
+        key_prefix: normalize_cloudflare_prefix(mount.prefix.as_deref()),
+        credentials: build_access_key_credentials(
+            mount.access_id.as_deref(),
+            mount.secret_access_key.as_deref(),
+        ),
+        read_only: mount.read_only,
+    })
+}
+
+fn validate_access_key_pair(
+    label: &str,
+    access_key_id: Option<&str>,
+    secret_access_key: Option<&str>,
+) -> HostedSandboxResult<()> {
+    if access_key_id.is_some() != secret_access_key.is_some() {
+        return Err(HostedSandboxError::new(format!(
+            "{label} require both access_key_id and secret_access_key when either is provided"
+        )));
+    }
+    Ok(())
+}
+
+fn build_access_key_credentials(
+    access_key_id: Option<&str>,
+    secret_access_key: Option<&str>,
+) -> Option<HostedAccessKeyCredentials> {
+    match (access_key_id, secret_access_key) {
+        (Some(access_key_id), Some(secret_access_key)) => Some(HostedAccessKeyCredentials {
+            access_key_id: access_key_id.to_owned(),
+            secret_access_key: secret_access_key.to_owned(),
+        }),
+        _ => None,
+    }
+}
+
+fn join_remote_path(bucket: &str, prefix: Option<&str>) -> String {
+    match prefix
+        .map(|prefix| prefix.trim_matches('/'))
+        .filter(|prefix| !prefix.is_empty())
+    {
+        Some(prefix) => format!("{bucket}/{prefix}"),
+        None => bucket.to_owned(),
+    }
+}
+
+fn r2_endpoint(account_id: &str, custom_domain: Option<&str>) -> String {
+    custom_domain
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("https://{account_id}.r2.cloudflarestorage.com"))
+}
+
+fn normalize_cloudflare_prefix(prefix: Option<&str>) -> Option<String> {
+    match prefix {
+        None => None,
+        Some(prefix) => {
+            let trimmed = prefix.trim_matches('/');
+            if trimmed.is_empty() {
+                Some("/".to_owned())
+            } else {
+                Some(format!("/{trimmed}/"))
+            }
+        }
+    }
+}
+
+fn validate_modal_secret_fields(
+    secret_name: Option<&str>,
+    secret_environment_name: Option<&str>,
+    mount_type: &str,
+) -> HostedSandboxResult<()> {
+    if matches!(secret_name, Some("")) {
+        return Err(HostedSandboxError::new(format!(
+            "modal cloud bucket secret_name must be a non-empty string for {mount_type}"
+        )));
+    }
+    if matches!(secret_environment_name, Some("")) {
+        return Err(HostedSandboxError::new(format!(
+            "modal cloud bucket secret_environment_name must be a non-empty string for {mount_type}"
+        )));
+    }
+    if secret_environment_name.is_some() && secret_name.is_none() {
+        return Err(HostedSandboxError::new(
+            "modal cloud bucket secret_environment_name requires secret_name to also be set",
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HostedSandboxClientOptionsBase {
     pub workspace_root: Option<String>,

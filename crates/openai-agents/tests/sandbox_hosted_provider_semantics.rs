@@ -8,8 +8,8 @@ use openai_agents::extensions::{
     BlaxelSandboxClient, BlaxelSandboxClientOptions, CloudflareSandboxClient,
     CloudflareSandboxClientOptions, DEFAULT_DAYTONA_WORKSPACE_ROOT, DEFAULT_VERCEL_WORKSPACE_ROOT,
     DaytonaSandboxClient, DaytonaSandboxClientOptions, E2BSandboxClient, E2BSandboxClientOptions,
-    RunloopSandboxClient, RunloopSandboxClientOptions, VercelSandboxClient,
-    VercelSandboxClientOptions,
+    HostedMountEntry, HostedProviderMountPayload, RunloopSandboxClient,
+    RunloopSandboxClientOptions, VercelSandboxClient, VercelSandboxClientOptions,
 };
 use serde_json::Value;
 
@@ -284,6 +284,254 @@ fn hosted_provider_capabilities_preserve_ports_and_pty_flags() {
     );
     assert_eq!(vercel_created.state().exposed_ports, vec![8080]);
     assert!(!vercel_created.supports_pty());
+}
+
+#[test]
+fn hosted_provider_mount_strategies_match_upstream_payloads() {
+    let e2b_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "s3_mount",
+        "bucket": "code-bucket",
+        "access_key_id": "ak",
+        "secret_access_key": "sk",
+        "session_token": "session",
+        "prefix": "repo/src",
+        "region": "us-west-2",
+        "mount_path": "/workspace/data",
+        "mount_strategy": { "type": "e2b_cloud_bucket" }
+    }))
+    .expect("e2b mount should parse");
+    let e2b_payload = serde_json::to_value(
+        e2b_mount
+            .resolve_provider_payload()
+            .expect("e2b payload should resolve"),
+    )
+    .expect("e2b payload should serialize");
+    assert_eq!(
+        e2b_payload,
+        serde_json::json!({
+            "provider": "e2b",
+            "config": {
+                "provider": "s3",
+                "strategy": "e2b_cloud_bucket",
+                "bucket": "code-bucket",
+                "remote_path": "code-bucket/repo/src",
+                "mount_path": "/workspace/data",
+                "endpoint_url": null,
+                "region": "us-west-2",
+                "credentials": {
+                    "access_key_id": "ak",
+                    "secret_access_key": "sk"
+                },
+                "session_token": "session",
+                "service_account_credentials": null,
+                "access_token": null,
+                "read_only": true
+            }
+        })
+    );
+
+    let modal_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "gcs_mount",
+        "bucket": "analytics",
+        "access_id": "gcs-access",
+        "secret_access_key": "gcs-secret",
+        "prefix": "exports/2026",
+        "read_only": false,
+        "mount_strategy": { "type": "modal_cloud_bucket" }
+    }))
+    .expect("modal mount should parse");
+    let modal_payload = serde_json::to_value(
+        modal_mount
+            .resolve_provider_payload()
+            .expect("modal payload should resolve"),
+    )
+    .expect("modal payload should serialize");
+    assert_eq!(
+        modal_payload,
+        serde_json::json!({
+            "provider": "modal",
+            "config": {
+                "bucket_name": "analytics",
+                "bucket_endpoint_url": "https://storage.googleapis.com",
+                "key_prefix": "exports/2026",
+                "credentials": {
+                    "GOOGLE_ACCESS_KEY_ID": "gcs-access",
+                    "GOOGLE_ACCESS_KEY_SECRET": "gcs-secret"
+                },
+                "secret_name": null,
+                "secret_environment_name": null,
+                "read_only": false
+            }
+        })
+    );
+
+    let cloudflare_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "r2_mount",
+        "bucket": "static-assets",
+        "account_id": "acct-123",
+        "access_key_id": "r2-ak",
+        "secret_access_key": "r2-sk",
+        "mount_strategy": { "type": "cloudflare_bucket_mount" }
+    }))
+    .expect("cloudflare mount should parse");
+    let cloudflare_payload = serde_json::to_value(
+        cloudflare_mount
+            .resolve_provider_payload()
+            .expect("cloudflare payload should resolve"),
+    )
+    .expect("cloudflare payload should serialize");
+    assert_eq!(
+        cloudflare_payload,
+        serde_json::json!({
+            "provider": "cloudflare",
+            "config": {
+                "bucket_name": "static-assets",
+                "bucket_endpoint_url": "https://acct-123.r2.cloudflarestorage.com",
+                "provider": "r2",
+                "key_prefix": null,
+                "credentials": {
+                    "access_key_id": "r2-ak",
+                    "secret_access_key": "r2-sk"
+                },
+                "read_only": true
+            }
+        })
+    );
+
+    let blaxel_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "gcs_mount",
+        "bucket": "docs",
+        "service_account_credentials": "{\"client_email\":\"bot@example.com\"}",
+        "mount_path": "/workspace/docs",
+        "mount_strategy": { "type": "blaxel_cloud_bucket" }
+    }))
+    .expect("blaxel mount should parse");
+    let blaxel_payload = serde_json::to_value(
+        blaxel_mount
+            .resolve_provider_payload()
+            .expect("blaxel payload should resolve"),
+    )
+    .expect("blaxel payload should serialize");
+    assert_eq!(
+        blaxel_payload,
+        serde_json::json!({
+            "provider": "blaxel",
+            "config": {
+                "provider": "gcs",
+                "bucket": "docs",
+                "mount_path": "/workspace/docs",
+                "read_only": true,
+                "access_key_id": null,
+                "secret_access_key": null,
+                "session_token": null,
+                "region": null,
+                "endpoint_url": null,
+                "prefix": null,
+                "service_account_key": "{\"client_email\":\"bot@example.com\"}"
+            }
+        })
+    );
+
+    let daytona_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "gcs_mount",
+        "bucket": "analytics",
+        "access_token": "ya29.token",
+        "prefix": "daily",
+        "mount_strategy": { "type": "daytona_cloud_bucket" }
+    }))
+    .expect("daytona mount should parse");
+    let runloop_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "s3_mount",
+        "bucket": "logs",
+        "endpoint_url": "https://s3.example.test",
+        "mount_strategy": { "type": "runloop_cloud_bucket" }
+    }))
+    .expect("runloop mount should parse");
+    let daytona_payload = daytona_mount
+        .resolve_provider_payload()
+        .expect("daytona payload should resolve");
+    let runloop_payload = runloop_mount
+        .resolve_provider_payload()
+        .expect("runloop payload should resolve");
+    assert!(matches!(
+        daytona_payload,
+        HostedProviderMountPayload::Daytona { .. }
+    ));
+    assert!(matches!(
+        runloop_payload,
+        HostedProviderMountPayload::Runloop { .. }
+    ));
+
+    let invalid_modal: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "s3_mount",
+        "bucket": "bucket",
+        "access_key_id": "ak",
+        "secret_access_key": "sk",
+        "mount_strategy": {
+            "type": "modal_cloud_bucket",
+            "secret_name": "named-secret"
+        }
+    }))
+    .expect("invalid modal mount should still parse");
+    let invalid_modal_error = invalid_modal
+        .resolve_provider_payload()
+        .expect_err("modal should reject mixed inline credentials and secret_name");
+    assert!(
+        invalid_modal_error
+            .to_string()
+            .contains("do not support both inline credentials and secret_name")
+    );
+
+    let invalid_cloudflare: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "s3_mount",
+        "bucket": "bucket",
+        "access_key_id": "ak",
+        "secret_access_key": "sk",
+        "session_token": "session",
+        "mount_strategy": { "type": "cloudflare_bucket_mount" }
+    }))
+    .expect("invalid cloudflare mount should still parse");
+    let invalid_cloudflare_error = invalid_cloudflare
+        .resolve_provider_payload()
+        .expect_err("cloudflare should reject s3 session tokens");
+    assert!(
+        invalid_cloudflare_error
+            .to_string()
+            .contains("do not support s3 session_token credentials")
+    );
+
+    let invalid_r2: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "r2_mount",
+        "bucket": "bucket",
+        "account_id": "acct",
+        "access_key_id": "only-access",
+        "mount_strategy": { "type": "runloop_cloud_bucket" }
+    }))
+    .expect("invalid r2 mount should still parse");
+    let invalid_r2_error = invalid_r2
+        .resolve_provider_payload()
+        .expect_err("r2 should reject incomplete credential pairs");
+    assert!(
+        invalid_r2_error
+            .to_string()
+            .contains("require both access_key_id and secret_access_key")
+    );
+
+    let invalid_gcs: HostedMountEntry = serde_json::from_value(serde_json::json!({
+        "type": "gcs_mount",
+        "bucket": "bucket",
+        "service_account_credentials": "{\"client_email\":\"bot@example.com\"}",
+        "mount_strategy": { "type": "cloudflare_bucket_mount" }
+    }))
+    .expect("invalid gcs mount should still parse");
+    let invalid_gcs_error = invalid_gcs
+        .resolve_provider_payload()
+        .expect_err("cloudflare should reject native gcs auth");
+    assert!(
+        invalid_gcs_error
+            .to_string()
+            .contains("gcs cloudflare bucket mounts require access_id and secret_access_key")
+    );
 }
 
 fn create_temp_crate(workspace_root: &Path, feature: &str, provider: &str) -> PathBuf {

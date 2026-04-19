@@ -525,13 +525,14 @@ impl Runner {
                 .await;
         }
 
-        let sandbox_identities = crate::sandbox::build_sandbox_identity_map(agent);
+        let (annotated_agent, sandbox_identities) =
+            crate::sandbox::build_sandbox_identity_map(agent);
         let mut sandbox_runtimes_by_key = BTreeMap::new();
         let mut current_agent = prepare_agent_runtime_for_run(
             &self.config,
             &sandbox_identities,
             &mut sandbox_runtimes_by_key,
-            agent,
+            &annotated_agent,
         )?;
         let mut current_input_history = base_input;
         let mut normalized_generated_items = Vec::new();
@@ -1107,12 +1108,12 @@ impl Runner {
     pub async fn resume_with_agent(&self, state: &RunState, agent: &Agent) -> Result<RunResult> {
         let mut rebound_state = state.clone();
         let resumed_agent = if let Some(sandbox_state) = rebound_state.sandbox.as_ref() {
-            let identities = crate::sandbox::build_sandbox_identity_map(agent);
+            let (annotated_agent, identities) = crate::sandbox::build_sandbox_identity_map(agent);
             let resolved_agent = crate::sandbox::resolve_agent_for_sandbox_key(
                 &identities,
                 &sandbox_state.current_agent_key,
             )
-            .unwrap_or_else(|| agent.clone());
+            .unwrap_or_else(|| annotated_agent.clone());
             sandbox_state
                 .sessions_by_agent
                 .get(&sandbox_state.current_agent_key)
@@ -1122,7 +1123,8 @@ impl Runner {
                 .transpose()?
                 .unwrap_or(resolved_agent)
         } else {
-            crate::sandbox::restore_agent_from_run_state(agent, None)?
+            let (annotated_agent, _) = crate::sandbox::build_sandbox_identity_map(agent);
+            crate::sandbox::restore_agent_from_run_state(&annotated_agent, None)?
         };
         rebound_state.set_current_agent(resumed_agent.clone());
         if matches!(

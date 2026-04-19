@@ -303,6 +303,8 @@ pub struct Agent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_definition: Option<crate::sandbox::SandboxAgentDefinition>,
     #[serde(skip, default)]
+    pub sandbox_identity_key: Option<String>,
+    #[serde(skip, default)]
     pub sandbox_runtime: Option<crate::sandbox::AgentSandboxRuntime>,
 }
 
@@ -338,6 +340,7 @@ impl fmt::Debug for Agent {
                     .as_ref()
                     .map(|_| "<sandbox-definition>"),
             )
+            .field("sandbox_identity_key", &self.sandbox_identity_key)
             .field(
                 "sandbox_runtime",
                 &self.sandbox_runtime.as_ref().map(|_| "<sandbox-runtime>"),

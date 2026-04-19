@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
@@ -353,7 +353,7 @@ pub struct LocalSandboxPtySession {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SandboxIdentityMap {
-    key_by_signature: HashMap<(String, String), String>,
+    key_by_signature: BTreeMap<(String, String), String>,
     agent_by_key: BTreeMap<String, Agent>,
 }
 
@@ -872,91 +872,173 @@ fn sandbox_agent_signature(agent: &Agent) -> Option<String> {
     .ok()
 }
 
-fn collect_reachable_agents(agent: &Agent, visited: &mut HashSet<String>, agents: &mut Vec<Agent>) {
-    let signature = serde_json::to_string(&serde_json::json!({
+fn sandbox_reachability_signature(agent: &Agent) -> String {
+    serde_json::to_string(&serde_json::json!({
         "name": agent.name,
         "instructions": agent.instructions,
         "model": agent.model,
         "handoffs": agent.handoffs.iter().map(|handoff| handoff.target.clone()).collect::<Vec<_>>(),
         "sandbox_signature": sandbox_agent_signature(agent),
     }))
-    .unwrap_or_else(|_| agent.name.clone());
-    if !visited.insert(signature) {
-        return;
+    .unwrap_or_else(|_| agent.name.clone())
+}
+
+fn should_reuse_ancestor_identity(path_signatures: &[String], signature: &str) -> bool {
+    path_signatures.len() >= 2 && path_signatures.iter().any(|seen| seen == signature)
+}
+
+fn next_sandbox_identity_key(
+    agent: &Agent,
+    literal_names: &BTreeSet<String>,
+    used_keys: &mut BTreeSet<String>,
+    counts_by_name: &mut BTreeMap<String, usize>,
+) -> String {
+    let name = agent.name.clone();
+    let duplicate_index = counts_by_name
+        .entry(name.clone())
+        .and_modify(|count| *count += 1)
+        .or_insert(1);
+    if *duplicate_index == 1 && !used_keys.contains(&name) {
+        used_keys.insert(name.clone());
+        return name;
     }
-    agents.push(agent.clone());
-    for handoff in &agent.handoffs {
-        if let Some(target) = handoff.runtime_agent() {
-            collect_reachable_agents(target, visited, agents);
+
+    let mut suffix = *duplicate_index;
+    loop {
+        let candidate = format!("{name}#{suffix}");
+        if !used_keys.contains(&candidate) && !literal_names.contains(&candidate) {
+            used_keys.insert(candidate.clone());
+            return candidate;
         }
+        suffix += 1;
     }
 }
 
-pub(crate) fn build_sandbox_identity_map(root: &Agent) -> SandboxIdentityMap {
-    let mut reachable = Vec::new();
-    collect_reachable_agents(root, &mut HashSet::new(), &mut reachable);
-
-    let literal_names = reachable
-        .iter()
-        .map(|agent| agent.name.clone())
-        .collect::<BTreeSet<_>>();
-    let mut grouped: BTreeMap<String, Vec<(String, Agent)>> = BTreeMap::new();
-    for agent in reachable {
-        let Some(signature) = sandbox_agent_signature(&agent) else {
-            continue;
-        };
-        grouped
-            .entry(agent.name.clone())
-            .or_default()
-            .push((signature, agent));
-    }
-
-    let mut used_keys = BTreeSet::new();
-    let mut key_by_signature = HashMap::new();
-    let mut agent_by_key = BTreeMap::new();
-    for (name, mut entries) in grouped {
-        entries.sort_by(|left, right| left.0.cmp(&right.0));
-        let duplicate_names = entries.len() > 1;
-        for (index, (signature, agent)) in entries.into_iter().enumerate() {
-            let key = if !duplicate_names && !used_keys.contains(&name) {
-                name.clone()
-            } else {
-                let mut suffix = if index == 0 { 1 } else { index + 1 };
-                loop {
-                    let candidate = if suffix == 1 {
-                        name.clone()
-                    } else {
-                        format!("{name}#{suffix}")
-                    };
-                    if !used_keys.contains(&candidate)
-                        && (!literal_names.contains(&candidate) || candidate == agent.name)
-                    {
-                        break candidate;
-                    }
-                    suffix += 1;
-                }
-            };
-            used_keys.insert(key.clone());
-            key_by_signature.insert((agent.name.clone(), signature), key.clone());
-            agent_by_key.insert(key, agent);
+fn annotate_sandbox_identity_graph(
+    agent: &Agent,
+    path_signatures: &mut Vec<String>,
+    path_keys: &mut Vec<Option<String>>,
+    literal_names: &BTreeSet<String>,
+    used_keys: &mut BTreeSet<String>,
+    counts_by_name: &mut BTreeMap<String, usize>,
+    agent_by_key: &mut BTreeMap<String, Agent>,
+) -> Agent {
+    let signature = sandbox_reachability_signature(agent);
+    if should_reuse_ancestor_identity(path_signatures, &signature) {
+        if let Some(existing_key) = path_signatures
+            .iter()
+            .rev()
+            .zip(path_keys.iter().rev())
+            .find_map(|(candidate_signature, key)| {
+                (candidate_signature == &signature)
+                    .then(|| key.clone())
+                    .flatten()
+            })
+        {
+            return agent.clone_with(|prepared| {
+                prepared.sandbox_identity_key = Some(existing_key);
+                prepared.sandbox_runtime = None;
+            });
         }
     }
 
-    SandboxIdentityMap {
-        key_by_signature,
-        agent_by_key,
+    let mut annotated = agent.clone_with(|prepared| {
+        prepared.sandbox_runtime = None;
+    });
+    if sandbox_agent_signature(&annotated).is_some() {
+        let had_existing_key = annotated.sandbox_identity_key.is_some();
+        let key = annotated.sandbox_identity_key.clone().unwrap_or_else(|| {
+            next_sandbox_identity_key(&annotated, literal_names, used_keys, counts_by_name)
+        });
+        used_keys.insert(key.clone());
+        if had_existing_key {
+            counts_by_name
+                .entry(annotated.name.clone())
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
+        }
+        annotated.sandbox_identity_key = Some(key);
     }
+
+    path_signatures.push(signature);
+    path_keys.push(annotated.sandbox_identity_key.clone());
+    for handoff in &mut annotated.handoffs {
+        if let Some(target) = handoff.runtime_agent().cloned() {
+            let annotated_target = annotate_sandbox_identity_graph(
+                &target,
+                path_signatures,
+                path_keys,
+                literal_names,
+                used_keys,
+                counts_by_name,
+                agent_by_key,
+            );
+            handoff.agent = Some(Box::new(annotated_target));
+        }
+    }
+    if let Some(key) = annotated.sandbox_identity_key.clone() {
+        agent_by_key.insert(key, annotated.clone());
+    }
+    let result = annotated;
+    path_keys.pop();
+    path_signatures.pop();
+    result
+}
+
+pub(crate) fn build_sandbox_identity_map(root: &Agent) -> (Agent, SandboxIdentityMap) {
+    let literal_names =
+        std::iter::once(root.clone())
+            .flat_map(|agent| {
+                let mut names = vec![agent.name.clone()];
+                names.extend(agent.handoffs.iter().filter_map(|handoff| {
+                    handoff.runtime_agent().map(|target| target.name.clone())
+                }));
+                names
+            })
+            .collect::<BTreeSet<_>>();
+    let mut used_keys = BTreeSet::new();
+    let mut counts_by_name = BTreeMap::new();
+    let mut key_by_signature = BTreeMap::new();
+    let mut agent_by_key = BTreeMap::new();
+    let annotated_root = annotate_sandbox_identity_graph(
+        root,
+        &mut Vec::new(),
+        &mut Vec::new(),
+        &literal_names,
+        &mut used_keys,
+        &mut counts_by_name,
+        &mut agent_by_key,
+    );
+    for (key, agent) in &agent_by_key {
+        if let Some(signature) = sandbox_agent_signature(agent) {
+            key_by_signature.insert((agent.name.clone(), signature), key.clone());
+        }
+    }
+
+    (
+        annotated_root,
+        SandboxIdentityMap {
+            key_by_signature,
+            agent_by_key,
+        },
+    )
 }
 
 pub(crate) fn sandbox_identity_key_for_agent(
     identities: &SandboxIdentityMap,
     agent: &Agent,
 ) -> Option<String> {
-    let signature = sandbox_agent_signature(agent)?;
-    identities
-        .key_by_signature
-        .get(&(agent.name.clone(), signature))
-        .cloned()
+    agent
+        .sandbox_identity_key
+        .clone()
+        .filter(|key| identities.agent_by_key.contains_key(key))
+        .or_else(|| {
+            let signature = sandbox_agent_signature(agent)?;
+            identities
+                .key_by_signature
+                .get(&(agent.name.clone(), signature))
+                .cloned()
+        })
 }
 
 pub(crate) fn resolve_agent_for_sandbox_key(

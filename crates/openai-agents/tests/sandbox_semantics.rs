@@ -2337,6 +2337,183 @@ async fn duplicate_named_sandbox_agents_keep_distinct_resume_identity() {
     );
 }
 
+#[tokio::test]
+async fn duplicate_named_structurally_identical_sandbox_agents_keep_distinct_resume_identity() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+
+    let approval_tool = openai_agents::function_tool(
+        "approval_tool",
+        "Approval gate",
+        |_ctx, (): ()| async move { Ok::<_, openai_agents::AgentsError>("approved".to_owned()) },
+    )
+    .expect("approval tool should build")
+    .with_needs_approval(true);
+
+    let build_graph = |approval_tool: openai_agents::FunctionTool| {
+        let child = SandboxAgent::builder("sandbox")
+            .instructions("Same")
+            .capabilities(vec![
+                openai_agents::sandbox::SandboxCapability::Filesystem,
+                openai_agents::sandbox::SandboxCapability::Shell,
+            ])
+            .model("shared")
+            .build()
+            .into_agent()
+            .clone_with(|agent| agent.function_tools.push(approval_tool.clone()));
+        SandboxAgent::builder("sandbox")
+            .instructions("Same")
+            .capabilities(vec![
+                openai_agents::sandbox::SandboxCapability::Filesystem,
+                openai_agents::sandbox::SandboxCapability::Shell,
+            ])
+            .model("shared")
+            .build()
+            .into_agent()
+            .clone_with(|agent| {
+                agent.function_tools.push(approval_tool);
+                agent.handoffs = vec![openai_agents::handoff(child.clone())];
+            })
+    };
+
+    let provider = Arc::new(NamedSandboxProvider {
+        models: HashMap::from([(
+            "shared".to_owned(),
+            Arc::new(ScriptedModel::new(|request, call| match call {
+                1 => Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "root-write".to_owned(),
+                        tool_name: "sandbox_run_shell".to_owned(),
+                        arguments: json!({ "command": "touch root.txt" }),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-1".to_owned()),
+                    request_id: Some("shared-req-1".to_owned()),
+                }),
+                2 => Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::Handoff {
+                        target_agent: "sandbox".to_owned(),
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-2".to_owned()),
+                    request_id: Some("shared-req-2".to_owned()),
+                }),
+                3 => Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "child-write".to_owned(),
+                        tool_name: "sandbox_run_shell".to_owned(),
+                        arguments: json!({ "command": "touch child.txt" }),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-3".to_owned()),
+                    request_id: Some("shared-req-3".to_owned()),
+                }),
+                4 => Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "child-approval".to_owned(),
+                        tool_name: "approval_tool".to_owned(),
+                        arguments: json!({}),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-4".to_owned()),
+                    request_id: Some("shared-req-4".to_owned()),
+                }),
+                5 => Ok(ModelResponse {
+                    model: request.model,
+                    output: vec![OutputItem::ToolCall {
+                        call_id: "child-read".to_owned(),
+                        tool_name: "sandbox_read_file".to_owned(),
+                        arguments: json!({ "path": "/workspace/child.txt" }),
+                        namespace: None,
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-5".to_owned()),
+                    request_id: Some("shared-req-5".to_owned()),
+                }),
+                6 => Ok(ModelResponse {
+                    model: request.model.clone(),
+                    output: vec![OutputItem::Text {
+                        text: format!("child:{}", latest_tool_output_text(&request)),
+                    }],
+                    usage: Usage::default(),
+                    response_id: Some("shared-6".to_owned()),
+                    request_id: Some("shared-req-6".to_owned()),
+                }),
+                _ => panic!("unexpected shared turn"),
+            })) as Arc<dyn Model>,
+        )]),
+    });
+
+    let first_root = build_graph(approval_tool.clone());
+    let interrupted = Runner::new()
+        .with_model_provider(provider.clone())
+        .run(&first_root, "duplicate identical sandbox agents")
+        .await
+        .expect("initial duplicate-name run should interrupt cleanly");
+    let state = interrupted
+        .durable_state()
+        .cloned()
+        .expect("interrupted run should expose durable state");
+    let sandbox_state = state
+        .sandbox
+        .as_ref()
+        .expect("sandbox state should be captured");
+    assert_eq!(sandbox_state.sessions_by_agent.len(), 2);
+    assert_eq!(
+        sandbox_state
+            .sessions_by_agent
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["sandbox".to_owned(), "sandbox#2".to_owned()]
+    );
+    assert_ne!(
+        sandbox_state
+            .sessions_by_agent
+            .get("sandbox")
+            .map(|entry| entry.session_state.workspace_root.clone()),
+        sandbox_state
+            .sessions_by_agent
+            .get("sandbox#2")
+            .map(|entry| entry.session_state.workspace_root.clone())
+    );
+
+    let state_json = serde_json::to_string(&state).expect("run state should serialize");
+    let mut restored_state: openai_agents::RunState =
+        serde_json::from_str(&state_json).expect("run state should deserialize");
+    restored_state.approve_for_tool(
+        "child-approval",
+        Some("approval_tool".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let resumed = Runner::new()
+        .with_model_provider(provider)
+        .resume_with_agent(&restored_state, &build_graph(approval_tool))
+        .await
+        .expect("duplicate identical sandbox resume should succeed");
+
+    assert_eq!(resumed.final_output.as_deref(), Some("child:"));
+    let resumed_sandbox = resumed
+        .durable_state()
+        .and_then(|state| state.sandbox.as_ref())
+        .expect("resumed state should preserve sandbox mapping");
+    assert_eq!(
+        resumed_sandbox
+            .sessions_by_agent
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["sandbox#2".to_owned()]
+    );
+}
+
 #[test]
 fn caller_owned_snapshot_roots_are_cleaned_up_or_reported() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");

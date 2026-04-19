@@ -1,7 +1,7 @@
 {
   "milestone": "sandbox-composition",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -21,28 +21,13 @@
   },
   "reviewsSummary": {
     "total": 1,
-    "passed": 0,
-    "failed": 1,
-    "failedFeatures": [
-      "sandbox-handoffs-tools-and-identity-parity"
-    ]
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
   },
-  "blockingIssues": [
-    {
-      "featureId": "sandbox-handoffs-tools-and-identity-parity",
-      "severity": "blocking",
-      "description": "Duplicate-named sandbox agents are keyed only by `(agent.name, sandbox_agent_signature)`, so structurally identical agents with the same name collapse onto one sandbox identity/runtime and can leak workspace state across resume and composition flows."
-    }
-  ],
+  "blockingIssues": [],
   "appliedUpdates": [],
-  "suggestedGuidanceUpdates": [
-    {
-      "target": "skills",
-      "suggestion": "Update `rust-sandbox-worker` guidance or required regression coverage to include an adversarial case for duplicate-named sandbox agents that are structurally identical, not just duplicate names with differing manifests, models, or instructions.",
-      "evidence": "The scrutiny review for `sandbox-handoffs-tools-and-identity-parity` found that the landed regression only exercises duplicate `sandbox` agents with different instructions/manifests/models in `crates/openai-agents/tests/sandbox_semantics.rs`, which allowed an identity-collision bug for structurally identical duplicate-named agents to pass unnoticed.",
-      "isSystemic": false
-    }
-  ],
+  "suggestedGuidanceUpdates": [],
   "rejectedObservations": [],
-  "previousRound": null
+  "previousRound": ".factory/validation/sandbox-composition/scrutiny/synthesis.round1.json"
 }

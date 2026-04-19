@@ -1,0 +1,15 @@
+{
+  "featureId": "sandbox-duplicate-name-instance-identity-followup",
+  "reviewedAt": "2026-04-19T17:35:38.126871+00:00",
+  "commitId": "0b5e76c943d805563138bb9441519fdcd4f1ad54",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The follow-up removes the original signature-only dedupe path and assigns stable per-instance sandbox identity keys while rebuilding an annotated reachable-agent graph, so structurally identical same-name sandbox agents no longer collapse onto one runtime/session. Runner startup and resume now use that annotated graph, and the new regression proves distinct workspaces survive RunState JSON round-trips and approval resume.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/sandbox-composition/scrutiny/reviews/sandbox-handoffs-tools-and-identity-parity.json",
+  "summary": "Reviewed the prior failure, mission metadata, worker handoff/transcript skeleton, rust-sandbox-worker guidance, architecture/services docs, and both composition-related diffs. Commit 0b5e76c fixes the duplicate-identity collapse by annotating each reachable sandbox agent instance with a stable key, wiring run/resume through those keys, and adding a structurally-identical duplicate-name regression that demonstrates separate workspace preservation across serialization and resume. No new blocking issues were identified."
+}

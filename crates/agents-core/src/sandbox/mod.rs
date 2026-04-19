@@ -937,14 +937,11 @@ fn annotate_sandbox_identity_graph(
         {
             return agent.clone_with(|prepared| {
                 prepared.sandbox_identity_key = Some(existing_key);
-                prepared.sandbox_runtime = None;
             });
         }
     }
 
-    let mut annotated = agent.clone_with(|prepared| {
-        prepared.sandbox_runtime = None;
-    });
+    let mut annotated = agent.clone();
     if sandbox_agent_signature(&annotated).is_some() {
         let had_existing_key = annotated.sandbox_identity_key.is_some();
         let key = annotated.sandbox_identity_key.clone().unwrap_or_else(|| {
@@ -1132,19 +1129,24 @@ pub(crate) fn prepare_agent_for_sandbox(
         &capabilities,
         &manifest,
     );
-    let tools = default_function_tools(session.clone(), &capabilities)?;
+    let existing_sandbox_tool_overrides = agent
+        .function_tools
+        .iter()
+        .filter(|tool| is_sandbox_tool_name(&tool.definition.name))
+        .map(|tool| (tool.qualified_name(), tool.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut tools = default_function_tools(session.clone(), &capabilities)?;
+    for tool in &mut tools {
+        if let Some(existing) = existing_sandbox_tool_overrides.get(&tool.qualified_name()) {
+            apply_sandbox_tool_overrides(tool, existing);
+        }
+    }
 
     Ok(Some(agent.clone_with(|prepared| {
         prepared.instructions = Some(instructions);
-        prepared.function_tools.retain(|tool| {
-            !matches!(
-                tool.definition.name.as_str(),
-                "sandbox_list_files"
-                    | "sandbox_read_file"
-                    | "sandbox_run_shell"
-                    | "sandbox_apply_patch"
-            )
-        });
+        prepared
+            .function_tools
+            .retain(|tool| !is_sandbox_tool_name(&tool.definition.name));
         prepared.function_tools.extend(tools);
         prepared.sandbox_definition = Some(definition.clone());
         prepared.sandbox_runtime = Some(AgentSandboxRuntime {
@@ -1219,6 +1221,24 @@ fn build_instructions_from_parts(
     ));
     parts.push(format!("Workspace layout:\n{}", manifest.describe()));
     parts.join("\n\n")
+}
+
+fn is_sandbox_tool_name(name: &str) -> bool {
+    matches!(
+        name,
+        "sandbox_list_files" | "sandbox_read_file" | "sandbox_run_shell" | "sandbox_apply_patch"
+    )
+}
+
+fn apply_sandbox_tool_overrides(tool: &mut FunctionTool, existing: &FunctionTool) {
+    tool.enabled = existing.enabled;
+    tool.is_enabled = existing.is_enabled.clone();
+    tool.tool_input_guardrails = existing.tool_input_guardrails.clone();
+    tool.tool_output_guardrails = existing.tool_output_guardrails.clone();
+    tool.needs_approval = existing.needs_approval;
+    tool.timeout_seconds = existing.timeout_seconds;
+    tool.defer_loading = existing.defer_loading;
+    tool.definition.defer_loading = existing.definition.defer_loading;
 }
 
 fn default_function_tools(

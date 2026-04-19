@@ -48,6 +48,16 @@ impl SandboxCapability {
     pub fn defaults() -> Vec<Self> {
         vec![Self::Filesystem, Self::Shell, Self::ApplyPatch]
     }
+
+    fn dedupe(capabilities: Vec<Self>) -> Vec<Self> {
+        let mut normalized = Vec::new();
+        for capability in capabilities {
+            if !normalized.contains(&capability) {
+                normalized.push(capability);
+            }
+        }
+        normalized
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -121,18 +131,20 @@ impl SandboxAgentBuilder {
     }
 
     pub fn capabilities(mut self, capabilities: Vec<SandboxCapability>) -> Self {
-        self.capabilities = Some(capabilities);
+        self.capabilities = Some(SandboxCapability::dedupe(capabilities));
         self
     }
 
     pub fn build(self) -> SandboxAgent {
+        let capabilities = self
+            .capabilities
+            .map(SandboxCapability::dedupe)
+            .unwrap_or_else(SandboxCapability::defaults);
         SandboxAgent {
             agent: self.agent_builder.build(),
             default_manifest: self.default_manifest,
             base_instructions: self.base_instructions,
-            capabilities: self
-                .capabilities
-                .unwrap_or_else(SandboxCapability::defaults),
+            capabilities,
         }
     }
 }

@@ -377,6 +377,123 @@ async fn sandbox_capability_subsets_limit_attached_tool_bundle() {
     prepared.session.cleanup().expect("cleanup succeeds");
 }
 
+#[tokio::test]
+async fn sandbox_duplicate_capability_entries_do_not_create_duplicate_runtime_tool_names() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingSandboxProvider {
+        model: Arc::new(CapturingSandboxModel {
+            requests: requests.clone(),
+        }),
+    };
+    let sandbox_agent = SandboxAgent::builder("sandbox")
+        .instructions("Only use the allowed sandbox capabilities.")
+        .capabilities(vec![
+            SandboxCapability::Filesystem,
+            SandboxCapability::Filesystem,
+            SandboxCapability::ApplyPatch,
+            SandboxCapability::ApplyPatch,
+        ])
+        .build();
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(
+                Manifest::default().with_entry("README.md", File::from_text("workspace readme\n")),
+            ),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox run prepares");
+    Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&prepared.agent, "summarize the workspace")
+        .await
+        .expect("prepared sandbox run succeeds");
+
+    let request = requests.lock().await.remove(0);
+    let tool_names = request
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tool_names,
+        vec![
+            "sandbox_list_files",
+            "sandbox_read_file",
+            "sandbox_apply_patch"
+        ]
+    );
+
+    let instructions = request.instructions.expect("sandbox instructions");
+    assert_eq!(instructions.matches("filesystem").count(), 1);
+    assert_eq!(instructions.matches("apply_patch").count(), 1);
+    assert!(!instructions.contains("shell"));
+
+    let list_tool = prepared
+        .agent
+        .find_function_tool("sandbox_list_files", None)
+        .expect("filesystem subset keeps list tool");
+    let read_tool = prepared
+        .agent
+        .find_function_tool("sandbox_read_file", None)
+        .expect("filesystem subset keeps read tool");
+    let patch_tool = prepared
+        .agent
+        .find_function_tool("sandbox_apply_patch", None)
+        .expect("apply_patch subset keeps patch tool");
+
+    let listing = list_tool
+        .invoke(
+            tool_context("sandbox_list_files"),
+            serde_json::json!({ "path": "/workspace" }),
+        )
+        .await
+        .expect("deduped list tool runs");
+    let ToolOutput::Text(listing) = listing else {
+        panic!("list tool should return text output");
+    };
+    assert!(listing.text.contains("README.md"));
+
+    let contents = read_tool
+        .invoke(
+            tool_context("sandbox_read_file"),
+            serde_json::json!({ "path": "/workspace/README.md" }),
+        )
+        .await
+        .expect("deduped read tool runs");
+    let ToolOutput::Text(contents) = contents else {
+        panic!("read tool should return text output");
+    };
+    assert_eq!(contents.text, "workspace readme\n");
+
+    let patched = patch_tool
+        .invoke(
+            tool_context("sandbox_apply_patch"),
+            serde_json::json!({
+                "path": "/workspace/README.md",
+                "replacement": "patched workspace readme\n"
+            }),
+        )
+        .await
+        .expect("deduped patch tool runs");
+    let ToolOutput::Text(patched) = patched else {
+        panic!("patch tool should return text output");
+    };
+    assert_eq!(patched.text, "patched /workspace/README.md");
+    assert_eq!(
+        prepared
+            .session
+            .read_file("/workspace/README.md")
+            .expect("patched README remains readable"),
+        "patched workspace readme\n"
+    );
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+}
+
 #[test]
 fn localdir_staging_rejects_symlinked_ancestor_sources() {
     let _guard = localdir_hook_lock().lock().expect("hook lock");

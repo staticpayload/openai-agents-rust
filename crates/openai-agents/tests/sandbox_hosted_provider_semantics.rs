@@ -335,6 +335,67 @@ fn main() {
 }
 
 #[test]
+fn hosted_provider_pty_capability_is_independent_of_interactive_flag() {
+    let program = r#"use openai_agents::extensions::{
+    DaytonaSandboxClient, DaytonaSandboxClientOptions, RunloopSandboxClient,
+    RunloopSandboxClientOptions,
+};
+
+fn main() {
+    let daytona_client = DaytonaSandboxClient::new(DaytonaSandboxClientOptions {
+        api_key: Some("daytona-key".to_owned()),
+        ..Default::default()
+    });
+    let default_session = daytona_client
+        .create()
+        .expect("daytona create should succeed without PTY");
+    assert!(!default_session.state().interactive_pty);
+    assert!(
+        default_session.supports_pty(),
+        "backend PTY support should not depend on the initial interactive flag"
+    );
+
+    let resumed_default = daytona_client
+        .resume(default_session.state().clone())
+        .expect("daytona resume should preserve backend capability");
+    assert!(!resumed_default.state().interactive_pty);
+    assert!(resumed_default.supports_pty());
+
+    let runloop_client = RunloopSandboxClient::new(RunloopSandboxClientOptions {
+        api_key: Some("runloop-key".to_owned()),
+        ..Default::default()
+    });
+    let runloop_session = runloop_client
+        .create()
+        .expect("runloop create without PTY should succeed");
+    assert!(!runloop_session.supports_pty());
+
+    let runloop_error = RunloopSandboxClient::new(RunloopSandboxClientOptions {
+        api_key: Some("runloop-key".to_owned()),
+        interactive_pty: true,
+        ..Default::default()
+    })
+    .create()
+    .expect_err("runloop should still reject PTY requests");
+    assert!(runloop_error.to_string().contains("interactive PTY"));
+}
+"#;
+
+    let output = run_temp_crate(
+        "hosted-provider-pty-capability-independent",
+        &["daytona", "runloop"],
+        program,
+        TempCrateMode::Run,
+        &[],
+    );
+    assert_command_success(
+        "runtime",
+        "PTY capability independent of interactive flag",
+        &output,
+    );
+}
+
+#[test]
 fn hosted_provider_mount_strategies_match_upstream_payloads() {
     let e2b_mount: HostedMountEntry = serde_json::from_value(serde_json::json!({
         "type": "s3_mount",

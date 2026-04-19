@@ -1269,7 +1269,7 @@ macro_rules! define_hosted_sandbox_provider {
                 }
 
                 pub fn supports_pty(&self) -> bool {
-                    SPEC.supports_pty && self.state.interactive_pty
+                    SPEC.supports_pty
                 }
             }
         }

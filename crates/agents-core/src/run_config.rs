@@ -14,6 +14,7 @@ use crate::model::ModelProvider;
 use crate::model_settings::ModelSettings;
 use crate::run_context::{RunContext, RunContextWrapper};
 use crate::run_error_handlers::RunErrorHandlers;
+use crate::sandbox::SandboxRunConfig;
 use crate::session::Session;
 use crate::tracing::TracingConfig;
 
@@ -83,6 +84,7 @@ pub struct RunConfig {
     pub reasoning_item_id_policy: ReasoningItemIdPolicy,
     pub tracing: Option<TracingConfig>,
     pub model_settings: Option<ModelSettings>,
+    pub sandbox: Option<SandboxRunConfig>,
     pub session_settings: Option<SessionSettings>,
     #[serde(skip, default)]
     pub model_provider: Option<Arc<dyn ModelProvider>>,
@@ -127,6 +129,7 @@ impl std::fmt::Debug for RunConfig {
             .field("reasoning_item_id_policy", &self.reasoning_item_id_policy)
             .field("tracing", &self.tracing)
             .field("model_settings", &self.model_settings)
+            .field("sandbox", &self.sandbox)
             .field("session_settings", &self.session_settings)
             .field(
                 "model_provider",
@@ -190,6 +193,7 @@ impl Default for RunConfig {
             reasoning_item_id_policy: ReasoningItemIdPolicy::Preserve,
             tracing: None,
             model_settings: None,
+            sandbox: None,
             session_settings: None,
             model_provider: None,
             handoff_input_filter: None,

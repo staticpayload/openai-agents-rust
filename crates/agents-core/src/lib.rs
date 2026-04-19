@@ -38,6 +38,7 @@ pub mod run_config;
 pub mod run_context;
 pub mod run_error_handlers;
 pub mod run_state;
+pub mod sandbox;
 pub mod session;
 pub mod stream_events;
 pub mod strict_schema;
@@ -165,6 +166,11 @@ pub use run_error_handlers::{
 pub use run_state::{
     CURRENT_RUN_STATE_SCHEMA_VERSION, RunInterruption, RunInterruptionKind, RunState,
     RunStateContextSnapshot,
+};
+pub use sandbox::{
+    Dir, File, LocalDir, LocalSandboxSession, Manifest, ManifestEntry, PreparedSandboxRun,
+    SandboxAgent, SandboxAgentBuilder, SandboxCapability, SandboxConcurrencyLimits,
+    SandboxRunConfig, prepare_sandbox_run,
 };
 pub use stream_events::{
     AgentUpdatedStreamEvent, RawResponsesStreamEvent, RunItemStreamEvent, StreamEvent,

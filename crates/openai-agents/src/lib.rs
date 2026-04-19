@@ -36,10 +36,10 @@ pub use agents_core::{
     RetryPolicy, RetryPolicyContext, RunConfig, RunContext, RunContextWrapper, RunErrorData,
     RunErrorDetails, RunErrorHandler, RunErrorHandlerInput, RunErrorHandlerResult,
     RunErrorHandlers, RunHooks, RunInterruption, RunInterruptionKind, RunItem, RunItemStreamEvent,
-    RunOptions, RunResult, RunResultStreaming, RunState, Runner, SQLiteSession, SdkConfig, Session,
-    SessionABC, SessionInputCallback, SessionSettings, SharedAgentHooks, SharedRunHooks,
-    ShellActionRequest, ShellCallData, ShellCallOutcome, ShellCommandOutput, ShellCommandRequest,
-    ShellExecutor, ShellResult, ShellTool, ShellToolContainerAutoEnvironment,
+    RunOptions, RunResult, RunResultStreaming, RunState, Runner, SQLiteSession, SandboxAgent,
+    SandboxAgentBuilder, SandboxCapability, SandboxConcurrencyLimits, SandboxRunConfig, SdkConfig,
+    Session, ShellActionRequest, ShellCallData, ShellCallOutcome, ShellCommandOutput,
+    ShellCommandRequest, ShellExecutor, ShellResult, ShellTool, ShellToolContainerAutoEnvironment,
     ShellToolContainerNetworkPolicy, ShellToolContainerNetworkPolicyAllowlist,
     ShellToolContainerNetworkPolicyDisabled, ShellToolContainerNetworkPolicyDomainSecret,
     ShellToolContainerReferenceEnvironment, ShellToolContainerSkill, ShellToolEnvironment,
@@ -113,6 +113,10 @@ pub mod voice {
 
 pub mod extensions {
     pub use agents_extensions::*;
+}
+
+pub mod sandbox {
+    pub use agents_core::sandbox::*;
 }
 
 #[cfg(test)]

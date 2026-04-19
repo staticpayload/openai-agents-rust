@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex as StdMutex, OnceLock};
@@ -51,6 +52,20 @@ struct CapturingSandboxProvider {
 impl ModelProvider for CapturingSandboxProvider {
     fn resolve(&self, _model: Option<&str>) -> Arc<dyn Model> {
         self.model.clone()
+    }
+}
+
+#[derive(Clone)]
+struct NamedSandboxProvider {
+    models: HashMap<String, Arc<dyn Model>>,
+}
+
+impl ModelProvider for NamedSandboxProvider {
+    fn resolve(&self, model: Option<&str>) -> Arc<dyn Model> {
+        self.models
+            .get(model.unwrap_or_default())
+            .cloned()
+            .expect("named test model should exist")
     }
 }
 
@@ -116,6 +131,67 @@ impl Model for ApprovalResumeSandboxModel {
             }
         }
     }
+}
+
+type ModelHandler =
+    dyn Fn(ModelRequest, usize) -> openai_agents::Result<ModelResponse> + Send + Sync;
+
+#[derive(Clone)]
+struct ScriptedModel {
+    calls: Arc<Mutex<usize>>,
+    handler: Arc<ModelHandler>,
+}
+
+impl ScriptedModel {
+    fn new(
+        handler: impl Fn(ModelRequest, usize) -> openai_agents::Result<ModelResponse>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            calls: Arc::new(Mutex::new(0)),
+            handler: Arc::new(handler),
+        }
+    }
+}
+
+#[async_trait]
+impl Model for ScriptedModel {
+    async fn generate(&self, request: ModelRequest) -> openai_agents::Result<ModelResponse> {
+        let mut calls = self.calls.lock().await;
+        *calls += 1;
+        (self.handler)(request, *calls)
+    }
+}
+
+fn latest_tool_output_text(request: &ModelRequest) -> String {
+    if let Some(output) = request.input.iter().rev().find_map(|item| match item {
+        InputItem::Json { value } => value
+            .get("type")
+            .and_then(|kind| (kind == "tool_call_output").then_some(value))
+            .and_then(|value| value.get("output"))
+            .and_then(|output| {
+                output
+                    .get("text")
+                    .and_then(|text| text.as_str())
+                    .or_else(|| output.as_str())
+            })
+            .map(ToOwned::to_owned),
+        InputItem::Text { .. } => None,
+    }) {
+        return output;
+    }
+
+    request
+        .input
+        .iter()
+        .rev()
+        .find_map(|item| match item {
+            InputItem::Text { text } => Some(text.clone()),
+            InputItem::Json { .. } => None,
+        })
+        .unwrap_or_default()
 }
 
 fn tool_context(tool_name: &str) -> ToolContext {
@@ -1342,6 +1418,12 @@ async fn sandbox_runstate_resume_restores_workspace_after_teardown_impl() {
         serde_json::to_value(&state).expect("sandbox run state should serialize with resume data");
     let sandbox_payload = serialized_state
         .get("sandbox")
+        .and_then(|value| {
+            value
+                .get("current_agent_key")
+                .and_then(|key| key.as_str())
+                .and_then(|key| value.get("sessions_by_agent").and_then(|map| map.get(key)))
+        })
         .and_then(|value| value.get("session_state"))
         .cloned()
         .expect("run state should capture sandbox session state");
@@ -1395,14 +1477,24 @@ async fn sandbox_runstate_resume_restores_workspace_after_teardown_impl() {
         resumed
             .durable_state()
             .and_then(|state| state.sandbox.as_ref())
-            .map(|state| state.session_state.workspace_root.clone()),
+            .and_then(|state| {
+                state
+                    .sessions_by_agent
+                    .get(&state.current_agent_key)
+                    .map(|entry| entry.session_state.workspace_root.clone())
+            }),
         Some(original_workspace_root.clone())
     );
     assert_eq!(
         resumed
             .durable_state()
             .and_then(|state| state.sandbox.as_ref())
-            .and_then(|state| state.session_state.snapshot_root.clone()),
+            .and_then(|state| {
+                state
+                    .sessions_by_agent
+                    .get(&state.current_agent_key)
+                    .and_then(|entry| entry.session_state.snapshot_root.clone())
+            }),
         Some(snapshot_root)
     );
     assert!(
@@ -1781,6 +1873,467 @@ fn sandbox_memory_persists_notes_across_resumed_sessions() {
             .read_memory_note("summary")
             .expect("fresh sandbox note lookup should succeed"),
         None
+    );
+}
+
+#[tokio::test]
+async fn sandbox_handoffs_preserve_top_level_run_and_state() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let triage_model = ScriptedModel::new(|request, call| match call {
+        1 => Ok(ModelResponse {
+            model: request.model.clone(),
+            output: vec![OutputItem::Handoff {
+                target_agent: "worker".to_owned(),
+            }],
+            usage: Usage::default(),
+            response_id: Some("triage-1".to_owned()),
+            request_id: Some("triage-req-1".to_owned()),
+        }),
+        _ => panic!("triage should only run once"),
+    });
+    let worker_model = ScriptedModel::new(|request, call| match call {
+        1 => Ok(ModelResponse {
+            model: request.model,
+            output: vec![OutputItem::ToolCall {
+                call_id: "worker-read".to_owned(),
+                tool_name: "sandbox_read_file".to_owned(),
+                arguments: json!({ "path": "/workspace/note.txt" }),
+                namespace: None,
+            }],
+            usage: Usage::default(),
+            response_id: Some("worker-1".to_owned()),
+            request_id: Some("worker-req-1".to_owned()),
+        }),
+        2 => Ok(ModelResponse {
+            model: request.model.clone(),
+            output: vec![OutputItem::Text {
+                text: format!("worker:{}", latest_tool_output_text(&request)),
+            }],
+            usage: Usage::default(),
+            response_id: Some("worker-2".to_owned()),
+            request_id: Some("worker-req-2".to_owned()),
+        }),
+        _ => panic!("worker should only need two turns"),
+    });
+    let triage = openai_agents::Agent::builder("triage")
+        .handoff_to_agent(
+            SandboxAgent::builder("worker")
+                .instructions("Inspect the sandbox workspace.")
+                .default_manifest(
+                    Manifest::default().with_entry("note.txt", File::from_text("handoff-state\n")),
+                )
+                .model("worker-model")
+                .build()
+                .into_agent(),
+        )
+        .model("triage-model")
+        .build();
+
+    let result = Runner::new()
+        .with_model_provider(Arc::new(NamedSandboxProvider {
+            models: HashMap::from([
+                (
+                    "triage-model".to_owned(),
+                    Arc::new(triage_model) as Arc<dyn Model>,
+                ),
+                (
+                    "worker-model".to_owned(),
+                    Arc::new(worker_model) as Arc<dyn Model>,
+                ),
+            ]),
+        }))
+        .run(&triage, "route into sandbox")
+        .await
+        .expect("handoff run should succeed");
+
+    assert_eq!(
+        result.final_output.as_deref(),
+        Some("worker:handoff-state\n")
+    );
+    assert!(
+        result
+            .new_items
+            .iter()
+            .any(|item| matches!(item, openai_agents::RunItem::HandoffOutput { source_agent } if source_agent == "triage")),
+        "run should stay within one top-level result and record the handoff"
+    );
+    let sandbox_state = result
+        .durable_state()
+        .and_then(|state| state.sandbox.as_ref())
+        .expect("handoff run should capture sandbox state");
+    assert_eq!(sandbox_state.current_agent_key, "worker");
+    assert_eq!(sandbox_state.sessions_by_agent.len(), 1);
+    assert_eq!(
+        sandbox_state
+            .sessions_by_agent
+            .get("worker")
+            .and_then(|entry| entry.session_state.manifest.entries.get("note.txt")),
+        Some(&openai_agents::sandbox::ManifestEntry::File(
+            File::from_text("handoff-state\n")
+        ))
+    );
+}
+
+#[tokio::test]
+async fn sandbox_agents_as_tools_use_isolated_workspaces() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let alpha = SandboxAgent::builder("alpha")
+        .default_manifest(Manifest::default().with_entry("alpha.txt", File::from_text("alpha\n")))
+        .model("alpha-model")
+        .build();
+    let beta = SandboxAgent::builder("beta")
+        .default_manifest(Manifest::default().with_entry("beta.txt", File::from_text("beta\n")))
+        .model("beta-model")
+        .build();
+
+    let alpha_tool = alpha
+        .as_tool::<openai_agents::AgentAsToolInput>(
+            Some("alpha_worker"),
+            Some("Inspect the alpha workspace"),
+            openai_agents::AgentAsToolOptions::default(),
+        )
+        .expect("alpha sandbox tool should build");
+    let beta_tool = beta
+        .as_tool::<openai_agents::AgentAsToolInput>(
+            Some("beta_worker"),
+            Some("Inspect the beta workspace"),
+            openai_agents::AgentAsToolOptions::default(),
+        )
+        .expect("beta sandbox tool should build");
+
+    let orchestrator = openai_agents::Agent::builder("orchestrator")
+        .function_tool(alpha_tool)
+        .function_tool(beta_tool)
+        .model("orchestrator-model")
+        .build();
+    let provider = Arc::new(NamedSandboxProvider {
+        models: HashMap::from([
+            (
+                "orchestrator-model".to_owned(),
+                Arc::new(ScriptedModel::new(|request, call| match call {
+                    1 => Ok(ModelResponse {
+                        model: request.model.clone(),
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "alpha-call".to_owned(),
+                            tool_name: "alpha_worker".to_owned(),
+                            arguments: json!({ "input": "inspect alpha" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("orchestrator-1".to_owned()),
+                        request_id: Some("orchestrator-req-1".to_owned()),
+                    }),
+                    2 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "beta-call".to_owned(),
+                            tool_name: "beta_worker".to_owned(),
+                            arguments: json!({ "input": "inspect beta" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("orchestrator-2".to_owned()),
+                        request_id: Some("orchestrator-req-2".to_owned()),
+                    }),
+                    3 => Ok(ModelResponse {
+                        model: request.model.clone(),
+                        output: vec![OutputItem::Text {
+                            text: latest_tool_output_text(&request),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("orchestrator-3".to_owned()),
+                        request_id: Some("orchestrator-req-3".to_owned()),
+                    }),
+                    _ => panic!("unexpected orchestrator turn"),
+                })) as Arc<dyn Model>,
+            ),
+            (
+                "alpha-model".to_owned(),
+                Arc::new(ScriptedModel::new(|request, call| match call {
+                    1 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "list-call".to_owned(),
+                            tool_name: "sandbox_list_files".to_owned(),
+                            arguments: json!({ "path": "/workspace" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("alpha-list".to_owned()),
+                        request_id: Some("alpha-list-req".to_owned()),
+                    }),
+                    2 => Ok(ModelResponse {
+                        model: request.model.clone(),
+                        output: vec![OutputItem::Text {
+                            text: latest_tool_output_text(&request),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("alpha-finish".to_owned()),
+                        request_id: Some("alpha-finish-req".to_owned()),
+                    }),
+                    _ => panic!("unexpected alpha sandbox turn"),
+                })) as Arc<dyn Model>,
+            ),
+            (
+                "beta-model".to_owned(),
+                Arc::new(ScriptedModel::new(|request, call| match call {
+                    1 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "list-call".to_owned(),
+                            tool_name: "sandbox_list_files".to_owned(),
+                            arguments: json!({ "path": "/workspace" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("beta-list".to_owned()),
+                        request_id: Some("beta-list-req".to_owned()),
+                    }),
+                    2 => Ok(ModelResponse {
+                        model: request.model.clone(),
+                        output: vec![OutputItem::Text {
+                            text: latest_tool_output_text(&request),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("beta-finish".to_owned()),
+                        request_id: Some("beta-finish-req".to_owned()),
+                    }),
+                    _ => panic!("unexpected beta sandbox turn"),
+                })) as Arc<dyn Model>,
+            ),
+        ]),
+    });
+
+    let previous_runner = openai_agents::get_default_agent_runner();
+    openai_agents::set_default_agent_runner(Some(
+        Runner::new().with_model_provider(provider.clone()),
+    ));
+    let result = Runner::new()
+        .with_model_provider(provider)
+        .run(&orchestrator, "compare workspaces")
+        .await
+        .expect("sandbox agent tools should succeed");
+    openai_agents::set_default_agent_runner(Some(previous_runner));
+
+    let outputs = result
+        .new_items
+        .iter()
+        .filter_map(|item| match item {
+            openai_agents::RunItem::ToolCallOutput {
+                tool_name, output, ..
+            } => Some((
+                tool_name.as_str(),
+                output.as_text().unwrap_or_default().to_owned(),
+            )),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let alpha_listing = outputs
+        .iter()
+        .find(|(tool_name, _)| *tool_name == "alpha_worker")
+        .map(|(_, output)| output.clone())
+        .expect("alpha tool output should be present");
+    let beta_listing = outputs
+        .iter()
+        .find(|(tool_name, _)| *tool_name == "beta_worker")
+        .map(|(_, output)| output.clone())
+        .expect("beta tool output should be present");
+    assert!(alpha_listing.contains("alpha.txt"));
+    assert!(!alpha_listing.contains("beta.txt"));
+    assert!(beta_listing.contains("beta.txt"));
+    assert!(!beta_listing.contains("alpha.txt"));
+}
+
+#[tokio::test]
+async fn duplicate_named_sandbox_agents_keep_distinct_resume_identity() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+
+    let approval_tool = openai_agents::function_tool(
+        "approval_tool",
+        "Approval gate",
+        |_ctx, (): ()| async move { Ok::<_, openai_agents::AgentsError>("approved".to_owned()) },
+    )
+    .expect("approval tool should build")
+    .with_needs_approval(true);
+
+    let build_graph = |approval_tool: openai_agents::FunctionTool| {
+        let alpha = SandboxAgent::builder("sandbox")
+            .instructions("Alpha")
+            .default_manifest(
+                Manifest::default().with_entry("alpha.txt", File::from_text("alpha\n")),
+            )
+            .model("alpha")
+            .build()
+            .into_agent();
+        let beta = SandboxAgent::builder("sandbox")
+            .instructions("Beta")
+            .default_manifest(Manifest::default().with_entry("beta.txt", File::from_text("beta\n")))
+            .model("beta")
+            .build()
+            .into_agent()
+            .clone_with(|agent| agent.function_tools.push(approval_tool));
+        let alpha = alpha.clone_with(|agent| {
+            agent.handoffs = vec![openai_agents::handoff(beta.clone())];
+        });
+        let beta = beta.clone_with(|agent| {
+            agent.handoffs = vec![openai_agents::handoff(alpha.clone())];
+        });
+        alpha.clone_with(|agent| {
+            agent.handoffs = vec![openai_agents::handoff(beta.clone())];
+        })
+    };
+
+    let first_root = build_graph(approval_tool.clone());
+    let provider = Arc::new(NamedSandboxProvider {
+        models: HashMap::from([
+            (
+                "alpha".to_owned(),
+                Arc::new(ScriptedModel::new(|request, call| match call {
+                    1 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::Handoff {
+                            target_agent: "sandbox".to_owned(),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("alpha-1".to_owned()),
+                        request_id: Some("alpha-req-1".to_owned()),
+                    }),
+                    2 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "alpha-read".to_owned(),
+                            tool_name: "sandbox_read_file".to_owned(),
+                            arguments: json!({ "path": "/workspace/alpha.txt" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("alpha-2".to_owned()),
+                        request_id: Some("alpha-req-2".to_owned()),
+                    }),
+                    3 => Ok(ModelResponse {
+                        model: request.model.clone(),
+                        output: vec![OutputItem::Text {
+                            text: format!("alpha:{}", latest_tool_output_text(&request)),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("alpha-3".to_owned()),
+                        request_id: Some("alpha-req-3".to_owned()),
+                    }),
+                    _ => panic!("unexpected alpha turn"),
+                })) as Arc<dyn Model>,
+            ),
+            (
+                "beta".to_owned(),
+                Arc::new(ScriptedModel::new(|request, call| match call {
+                    1 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "beta-read".to_owned(),
+                            tool_name: "sandbox_read_file".to_owned(),
+                            arguments: json!({ "path": "/workspace/beta.txt" }),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("beta-1".to_owned()),
+                        request_id: Some("beta-req-1".to_owned()),
+                    }),
+                    2 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::ToolCall {
+                            call_id: "beta-approval".to_owned(),
+                            tool_name: "approval_tool".to_owned(),
+                            arguments: json!({}),
+                            namespace: None,
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("beta-2".to_owned()),
+                        request_id: Some("beta-req-2".to_owned()),
+                    }),
+                    3 => Ok(ModelResponse {
+                        model: request.model,
+                        output: vec![OutputItem::Handoff {
+                            target_agent: "sandbox".to_owned(),
+                        }],
+                        usage: Usage::default(),
+                        response_id: Some("beta-3".to_owned()),
+                        request_id: Some("beta-req-3".to_owned()),
+                    }),
+                    _ => panic!("unexpected beta turn"),
+                })) as Arc<dyn Model>,
+            ),
+        ]),
+    });
+
+    let first = Runner::new()
+        .with_model_provider(provider.clone())
+        .run(&first_root, "roundtrip duplicate sandbox identities")
+        .await
+        .expect("first duplicate-name run should interrupt cleanly");
+    let state = first
+        .durable_state()
+        .cloned()
+        .expect("interrupted run should expose durable state");
+    let sandbox_state = state
+        .sandbox
+        .as_ref()
+        .expect("sandbox state should be captured");
+    assert_eq!(sandbox_state.sessions_by_agent.len(), 2);
+    assert_eq!(
+        sandbox_state
+            .sessions_by_agent
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["sandbox".to_owned(), "sandbox#2".to_owned()]
+    );
+
+    let state_json = serde_json::to_string(&state).expect("run state should serialize");
+    let mut restored_state: openai_agents::RunState =
+        serde_json::from_str(&state_json).expect("run state should deserialize");
+    restored_state.approve_for_tool(
+        "beta-approval",
+        Some("approval_tool".to_owned()),
+        Some("approved".to_owned()),
+    );
+
+    let restored_root = build_graph(approval_tool);
+
+    let resumed = Runner::new()
+        .with_model_provider(provider)
+        .resume_with_agent(&restored_state, &restored_root)
+        .await
+        .expect("duplicate-name resume should succeed");
+
+    assert_eq!(resumed.final_output.as_deref(), Some("alpha:alpha\n"));
+    let resumed_sandbox = resumed
+        .durable_state()
+        .and_then(|state| state.sandbox.as_ref())
+        .expect("resumed state should preserve sandbox mapping");
+    assert_eq!(
+        resumed_sandbox
+            .sessions_by_agent
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["sandbox".to_owned(), "sandbox#2".to_owned()]
+    );
+    assert_eq!(
+        resumed_sandbox
+            .sessions_by_agent
+            .get("sandbox")
+            .and_then(|entry| entry.session_state.manifest.entries.get("alpha.txt")),
+        Some(&openai_agents::sandbox::ManifestEntry::File(
+            File::from_text("alpha\n")
+        ))
+    );
+    assert_eq!(
+        resumed_sandbox
+            .sessions_by_agent
+            .get("sandbox#2")
+            .and_then(|entry| entry.session_state.manifest.entries.get("beta.txt")),
+        Some(&openai_agents::sandbox::ManifestEntry::File(
+            File::from_text("beta\n")
+        ))
     );
 }
 

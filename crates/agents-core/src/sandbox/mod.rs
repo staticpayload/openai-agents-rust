@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
@@ -39,6 +40,13 @@ pub enum SandboxCapability {
     Filesystem,
     Shell,
     ApplyPatch,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxAgentDefinition {
+    pub default_manifest: Option<Manifest>,
+    pub base_instructions: Option<String>,
+    pub capabilities: Vec<SandboxCapability>,
 }
 
 impl SandboxCapability {
@@ -146,7 +154,15 @@ impl SandboxAgentBuilder {
             .map(SandboxCapability::dedupe)
             .unwrap_or_else(SandboxCapability::defaults);
         SandboxAgent {
-            agent: self.agent_builder.build(),
+            agent: {
+                let mut agent = self.agent_builder.build();
+                agent.sandbox_definition = Some(SandboxAgentDefinition {
+                    default_manifest: self.default_manifest.clone(),
+                    base_instructions: self.base_instructions.clone(),
+                    capabilities: capabilities.clone(),
+                });
+                agent
+            },
             default_manifest: self.default_manifest,
             base_instructions: self.base_instructions,
             capabilities,
@@ -298,11 +314,17 @@ pub struct LocalSandboxSessionState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SandboxRunState {
+pub struct SandboxAgentRunState {
     pub base_instructions: Option<String>,
     pub user_instructions: Option<String>,
     pub capabilities: Vec<SandboxCapability>,
     pub session_state: LocalSandboxSessionState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxRunState {
+    pub current_agent_key: String,
+    pub sessions_by_agent: BTreeMap<String, SandboxAgentRunState>,
 }
 
 #[derive(Clone, Debug)]
@@ -327,6 +349,12 @@ impl LocalShellOutput {
 #[derive(Clone, Debug)]
 pub struct LocalSandboxPtySession {
     inner: Arc<LocalSandboxPtySessionInner>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SandboxIdentityMap {
+    key_by_signature: HashMap<(String, String), String>,
+    agent_by_key: BTreeMap<String, Agent>,
 }
 
 #[derive(Debug)]
@@ -791,52 +819,166 @@ impl Drop for LocalSandboxSessionInner {
     }
 }
 
+fn sandbox_definition_for_agent(agent: &Agent) -> Option<SandboxAgentDefinition> {
+    agent.sandbox_definition.clone().or_else(|| {
+        agent
+            .sandbox_runtime
+            .as_ref()
+            .map(|runtime| SandboxAgentDefinition {
+                default_manifest: Some(runtime.session.manifest()),
+                base_instructions: runtime.base_instructions.clone(),
+                capabilities: runtime.capabilities.clone(),
+            })
+    })
+}
+
+fn sandbox_agent_signature(agent: &Agent) -> Option<String> {
+    let definition = sandbox_definition_for_agent(agent)?;
+    #[derive(Serialize)]
+    struct Signature<'a> {
+        name: &'a str,
+        base_instructions: Option<&'a String>,
+        user_instructions: Option<&'a String>,
+        model: Option<&'a String>,
+        capabilities: &'a Vec<SandboxCapability>,
+        manifest: &'a Option<Manifest>,
+        handoff_targets: Vec<&'a str>,
+    }
+
+    let base_instructions = agent
+        .sandbox_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.base_instructions.as_ref())
+        .or(definition.base_instructions.as_ref());
+    let user_instructions = agent
+        .sandbox_runtime
+        .as_ref()
+        .and_then(|runtime| runtime.user_instructions.as_ref())
+        .or_else(|| agent.instructions.as_ref());
+
+    serde_json::to_string(&Signature {
+        name: &agent.name,
+        base_instructions,
+        user_instructions,
+        model: agent.model.as_ref(),
+        capabilities: &definition.capabilities,
+        manifest: &definition.default_manifest,
+        handoff_targets: agent
+            .handoffs
+            .iter()
+            .map(|handoff| handoff.target.as_str())
+            .collect(),
+    })
+    .ok()
+}
+
+fn collect_reachable_agents(agent: &Agent, visited: &mut HashSet<String>, agents: &mut Vec<Agent>) {
+    let signature = serde_json::to_string(&serde_json::json!({
+        "name": agent.name,
+        "instructions": agent.instructions,
+        "model": agent.model,
+        "handoffs": agent.handoffs.iter().map(|handoff| handoff.target.clone()).collect::<Vec<_>>(),
+        "sandbox_signature": sandbox_agent_signature(agent),
+    }))
+    .unwrap_or_else(|_| agent.name.clone());
+    if !visited.insert(signature) {
+        return;
+    }
+    agents.push(agent.clone());
+    for handoff in &agent.handoffs {
+        if let Some(target) = handoff.runtime_agent() {
+            collect_reachable_agents(target, visited, agents);
+        }
+    }
+}
+
+pub(crate) fn build_sandbox_identity_map(root: &Agent) -> SandboxIdentityMap {
+    let mut reachable = Vec::new();
+    collect_reachable_agents(root, &mut HashSet::new(), &mut reachable);
+
+    let literal_names = reachable
+        .iter()
+        .map(|agent| agent.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut grouped: BTreeMap<String, Vec<(String, Agent)>> = BTreeMap::new();
+    for agent in reachable {
+        let Some(signature) = sandbox_agent_signature(&agent) else {
+            continue;
+        };
+        grouped
+            .entry(agent.name.clone())
+            .or_default()
+            .push((signature, agent));
+    }
+
+    let mut used_keys = BTreeSet::new();
+    let mut key_by_signature = HashMap::new();
+    let mut agent_by_key = BTreeMap::new();
+    for (name, mut entries) in grouped {
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        let duplicate_names = entries.len() > 1;
+        for (index, (signature, agent)) in entries.into_iter().enumerate() {
+            let key = if !duplicate_names && !used_keys.contains(&name) {
+                name.clone()
+            } else {
+                let mut suffix = if index == 0 { 1 } else { index + 1 };
+                loop {
+                    let candidate = if suffix == 1 {
+                        name.clone()
+                    } else {
+                        format!("{name}#{suffix}")
+                    };
+                    if !used_keys.contains(&candidate)
+                        && (!literal_names.contains(&candidate) || candidate == agent.name)
+                    {
+                        break candidate;
+                    }
+                    suffix += 1;
+                }
+            };
+            used_keys.insert(key.clone());
+            key_by_signature.insert((agent.name.clone(), signature), key.clone());
+            agent_by_key.insert(key, agent);
+        }
+    }
+
+    SandboxIdentityMap {
+        key_by_signature,
+        agent_by_key,
+    }
+}
+
+pub(crate) fn sandbox_identity_key_for_agent(
+    identities: &SandboxIdentityMap,
+    agent: &Agent,
+) -> Option<String> {
+    let signature = sandbox_agent_signature(agent)?;
+    identities
+        .key_by_signature
+        .get(&(agent.name.clone(), signature))
+        .cloned()
+}
+
+pub(crate) fn resolve_agent_for_sandbox_key(
+    identities: &SandboxIdentityMap,
+    key: &str,
+) -> Option<Agent> {
+    identities.agent_by_key.get(key).cloned()
+}
+
 pub fn prepare_sandbox_run(
     agent: &SandboxAgent,
     run_config: &crate::run_config::RunConfig,
 ) -> Result<PreparedSandboxRun> {
-    let sandbox_config = run_config.sandbox.clone().unwrap_or_default();
-    let session = if let Some(session) = sandbox_config.session {
-        if let Some(manifest) = sandbox_config.manifest {
-            session.apply_live_manifest_update(manifest)?;
-        }
-        session
-    } else if let Some(session_state) = sandbox_config.session_state {
-        LocalSandboxSession::resume(session_state)?
-    } else {
-        let manifest = sandbox_config
-            .manifest
-            .or_else(|| agent.default_manifest.clone())
-            .unwrap_or_default();
-        let workspace_root = create_temp_workspace_root()?;
-        if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
-            let _ = fs::remove_dir_all(&workspace_root);
-            return Err(error);
-        }
-        LocalSandboxSession {
-            inner: Arc::new(LocalSandboxSessionInner {
-                workspace_root,
-                manifest: Mutex::new(manifest),
-                persisted: Mutex::new(LocalSandboxPersistedState::default()),
-                runner_owned: true,
-                cleaned: Mutex::new(false),
-            }),
-        }
-    };
-    let manifest = session.manifest();
-    let instructions = build_instructions(agent, &manifest);
-    let tools = default_function_tools(session.clone(), &agent.capabilities)?;
-
-    let prepared_agent = agent.agent.clone_with(|prepared| {
-        prepared.instructions = Some(instructions);
-        prepared.function_tools.extend(tools);
-        prepared.sandbox_runtime = Some(AgentSandboxRuntime {
-            base_instructions: agent.base_instructions.clone(),
-            user_instructions: agent.agent.instructions.clone(),
-            capabilities: agent.capabilities.clone(),
-            session: session.clone(),
-        });
-    });
+    let prepared_agent = prepare_agent_for_sandbox(&agent.agent, run_config, None, None)?
+        .ok_or_else(|| {
+            AgentsError::message("sandbox agent definition is missing runtime configuration")
+        })?;
+    let session = prepared_agent
+        .sandbox_runtime
+        .as_ref()
+        .map(|runtime| runtime.session.clone())
+        .ok_or_else(|| AgentsError::message("prepared sandbox agent is missing runtime"))?;
 
     Ok(PreparedSandboxRun {
         agent: prepared_agent,
@@ -844,40 +986,73 @@ pub fn prepare_sandbox_run(
     })
 }
 
-impl AgentSandboxRuntime {
-    pub fn snapshot(&self) -> Option<SandboxRunState> {
-        if !self.session.runner_owned() {
-            return None;
-        }
-        let _ = self.session.refresh_snapshot_state();
-        Some(SandboxRunState {
-            base_instructions: self.base_instructions.clone(),
-            user_instructions: self.user_instructions.clone(),
-            capabilities: self.capabilities.clone(),
-            session_state: self.session.session_state(),
-        })
-    }
-}
-
-pub(crate) fn restore_agent_from_run_state(
+pub(crate) fn prepare_agent_for_sandbox(
     agent: &Agent,
-    state: Option<&SandboxRunState>,
-) -> Result<Agent> {
-    let Some(state) = state else {
-        return Ok(agent.clone());
+    run_config: &crate::run_config::RunConfig,
+    existing_runtime: Option<&AgentSandboxRuntime>,
+    resumed_state: Option<&SandboxAgentRunState>,
+) -> Result<Option<Agent>> {
+    let Some(definition) = sandbox_definition_for_agent(agent) else {
+        return Ok(None);
+    };
+    if existing_runtime.is_none() && agent.sandbox_runtime.is_some() {
+        return Ok(Some(agent.clone()));
+    }
+
+    let session = if let Some(runtime) = existing_runtime {
+        runtime.session.clone()
+    } else {
+        let sandbox_config = run_config.sandbox.clone().unwrap_or_default();
+        if let Some(session) = sandbox_config.session {
+            if let Some(manifest) = sandbox_config.manifest {
+                session.apply_live_manifest_update(manifest)?;
+            }
+            session
+        } else if let Some(state) = resumed_state {
+            LocalSandboxSession::resume(state.session_state.clone())?
+        } else if let Some(session_state) = sandbox_config.session_state {
+            LocalSandboxSession::resume(session_state)?
+        } else {
+            let manifest = sandbox_config
+                .manifest
+                .or_else(|| definition.default_manifest.clone())
+                .unwrap_or_default();
+            let workspace_root = create_temp_workspace_root()?;
+            if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
+                let _ = fs::remove_dir_all(&workspace_root);
+                return Err(error);
+            }
+            LocalSandboxSession {
+                inner: Arc::new(LocalSandboxSessionInner {
+                    workspace_root,
+                    manifest: Mutex::new(manifest),
+                    persisted: Mutex::new(LocalSandboxPersistedState::default()),
+                    runner_owned: true,
+                    cleaned: Mutex::new(false),
+                }),
+            }
+        }
     };
 
-    let session = LocalSandboxSession::resume(state.session_state.clone())?;
+    let base_instructions = resumed_state
+        .and_then(|state| state.base_instructions.clone())
+        .or(definition.base_instructions.clone());
+    let user_instructions = resumed_state
+        .and_then(|state| state.user_instructions.clone())
+        .or_else(|| agent.instructions.clone());
+    let capabilities = resumed_state
+        .map(|state| state.capabilities.clone())
+        .unwrap_or_else(|| definition.capabilities.clone());
     let manifest = session.manifest();
     let instructions = build_instructions_from_parts(
-        state.base_instructions.as_deref(),
-        state.user_instructions.as_deref(),
-        &state.capabilities,
+        base_instructions.as_deref(),
+        user_instructions.as_deref(),
+        &capabilities,
         &manifest,
     );
-    let tools = default_function_tools(session.clone(), &state.capabilities)?;
+    let tools = default_function_tools(session.clone(), &capabilities)?;
 
-    Ok(agent.clone_with(|prepared| {
+    Ok(Some(agent.clone_with(|prepared| {
         prepared.instructions = Some(instructions);
         prepared.function_tools.retain(|tool| {
             !matches!(
@@ -889,28 +1064,54 @@ pub(crate) fn restore_agent_from_run_state(
             )
         });
         prepared.function_tools.extend(tools);
+        prepared.sandbox_definition = Some(definition.clone());
         prepared.sandbox_runtime = Some(AgentSandboxRuntime {
-            base_instructions: state.base_instructions.clone(),
-            user_instructions: state.user_instructions.clone(),
-            capabilities: state.capabilities.clone(),
-            session,
+            base_instructions,
+            user_instructions,
+            capabilities,
+            session: session.clone(),
         });
-    }))
+    })))
+}
+
+impl AgentSandboxRuntime {
+    pub fn snapshot(&self) -> Option<SandboxAgentRunState> {
+        if !self.session.runner_owned() {
+            return None;
+        }
+        let _ = self.session.refresh_snapshot_state();
+        Some(SandboxAgentRunState {
+            base_instructions: self.base_instructions.clone(),
+            user_instructions: self.user_instructions.clone(),
+            capabilities: self.capabilities.clone(),
+            session_state: self.session.session_state(),
+        })
+    }
+}
+
+pub(crate) fn restore_agent_from_run_state(
+    agent: &Agent,
+    state: Option<&SandboxAgentRunState>,
+) -> Result<Agent> {
+    let Some(state) = state else {
+        return Ok(agent.clone());
+    };
+    let base_agent = agent.clone_with(|prepared| {
+        prepared.sandbox_runtime = None;
+    });
+    Ok(prepare_agent_for_sandbox(
+        &base_agent,
+        &crate::run_config::RunConfig::default(),
+        None,
+        Some(state),
+    )?
+    .unwrap_or(base_agent))
 }
 
 fn create_temp_workspace_root() -> Result<PathBuf> {
     let root = std::env::temp_dir().join(format!("openai-agents-sandbox-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).map_err(|error| AgentsError::message(error.to_string()))?;
     Ok(root)
-}
-
-fn build_instructions(agent: &SandboxAgent, manifest: &Manifest) -> String {
-    build_instructions_from_parts(
-        agent.base_instructions.as_deref(),
-        agent.agent.instructions.as_deref(),
-        &agent.capabilities,
-        manifest,
-    )
 }
 
 fn build_instructions_from_parts(

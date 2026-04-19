@@ -85,6 +85,8 @@ pub struct RunConfig {
     pub tracing: Option<TracingConfig>,
     pub model_settings: Option<ModelSettings>,
     pub sandbox: Option<SandboxRunConfig>,
+    #[serde(skip, default)]
+    pub sandbox_resume_state: Option<crate::sandbox::SandboxRunState>,
     pub session_settings: Option<SessionSettings>,
     #[serde(skip, default)]
     pub model_provider: Option<Arc<dyn ModelProvider>>,
@@ -130,6 +132,13 @@ impl std::fmt::Debug for RunConfig {
             .field("tracing", &self.tracing)
             .field("model_settings", &self.model_settings)
             .field("sandbox", &self.sandbox)
+            .field(
+                "sandbox_resume_state",
+                &self
+                    .sandbox_resume_state
+                    .as_ref()
+                    .map(|_| "<sandbox-resume-state>"),
+            )
             .field("session_settings", &self.session_settings)
             .field(
                 "model_provider",
@@ -194,6 +203,7 @@ impl Default for RunConfig {
             tracing: None,
             model_settings: None,
             sandbox: None,
+            sandbox_resume_state: None,
             session_settings: None,
             model_provider: None,
             handoff_input_filter: None,

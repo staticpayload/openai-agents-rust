@@ -17,7 +17,7 @@ use crate::tool_guardrails::{ToolInputGuardrailResult, ToolOutputGuardrailResult
 use crate::tracing::Trace;
 use crate::usage::Usage;
 
-pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.8";
+pub const CURRENT_RUN_STATE_SCHEMA_VERSION: &str = "1.9";
 
 /// Serializable snapshot of the runtime context carried across a run.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

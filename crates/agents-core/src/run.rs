@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use uuid::Uuid;
@@ -524,7 +525,14 @@ impl Runner {
                 .await;
         }
 
-        let mut current_agent = agent.clone();
+        let sandbox_identities = crate::sandbox::build_sandbox_identity_map(agent);
+        let mut sandbox_runtimes_by_key = BTreeMap::new();
+        let mut current_agent = prepare_agent_runtime_for_run(
+            &self.config,
+            &sandbox_identities,
+            &mut sandbox_runtimes_by_key,
+            agent,
+        )?;
         let mut current_input_history = base_input;
         let mut normalized_generated_items = Vec::new();
         let mut session_generated_items = Vec::new();
@@ -661,6 +669,12 @@ impl Runner {
                     step_items,
                 )
                 .await?;
+                let target_agent = prepare_agent_runtime_for_run(
+                    &self.config,
+                    &sandbox_identities,
+                    &mut sandbox_runtimes_by_key,
+                    &target_agent,
+                )?;
                 current_input_history = handoff_transition.input_history;
                 normalized_generated_items = handoff_transition.pre_handoff_items.clone();
                 normalized_generated_items.extend(handoff_transition.normalized_step_items);
@@ -954,10 +968,11 @@ impl Runner {
         if let Some(interruption) = interruptions.first().cloned() {
             run_state.current_step = Some(interruption);
         }
-        run_state.sandbox = current_agent
-            .sandbox_runtime
-            .as_ref()
-            .and_then(crate::sandbox::AgentSandboxRuntime::snapshot);
+        run_state.sandbox = snapshot_sandbox_run_state(
+            &sandbox_identities,
+            &sandbox_runtimes_by_key,
+            &current_agent,
+        );
         let trace = trace_manager.finish();
         run_state.set_trace(trace.clone());
         let normalized_result_items = (normalized_generated_items != session_generated_items)
@@ -1001,7 +1016,16 @@ impl Runner {
         let agent = state.current_agent.clone().ok_or_else(|| UserError {
             message: "cannot resume a run state without a current agent".to_owned(),
         })?;
-        let agent = crate::sandbox::restore_agent_from_run_state(&agent, state.sandbox.as_ref())?;
+        let agent = if let Some(sandbox_state) = state.sandbox.as_ref() {
+            sandbox_state
+                .sessions_by_agent
+                .get(&sandbox_state.current_agent_key)
+                .map(|entry| crate::sandbox::restore_agent_from_run_state(&agent, Some(entry)))
+                .transpose()?
+                .unwrap_or(agent)
+        } else {
+            agent
+        };
         if matches!(
             state
                 .current_step
@@ -1014,6 +1038,7 @@ impl Runner {
 
         let mut resumed_config = self.config.clone();
         resumed_config.max_turns = state.remaining_turns();
+        resumed_config.sandbox_resume_state = state.sandbox.clone();
         if let Some(trace) = &state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
@@ -1081,8 +1106,24 @@ impl Runner {
 
     pub async fn resume_with_agent(&self, state: &RunState, agent: &Agent) -> Result<RunResult> {
         let mut rebound_state = state.clone();
-        let resumed_agent =
-            crate::sandbox::restore_agent_from_run_state(agent, rebound_state.sandbox.as_ref())?;
+        let resumed_agent = if let Some(sandbox_state) = rebound_state.sandbox.as_ref() {
+            let identities = crate::sandbox::build_sandbox_identity_map(agent);
+            let resolved_agent = crate::sandbox::resolve_agent_for_sandbox_key(
+                &identities,
+                &sandbox_state.current_agent_key,
+            )
+            .unwrap_or_else(|| agent.clone());
+            sandbox_state
+                .sessions_by_agent
+                .get(&sandbox_state.current_agent_key)
+                .map(|entry| {
+                    crate::sandbox::restore_agent_from_run_state(&resolved_agent, Some(entry))
+                })
+                .transpose()?
+                .unwrap_or(resolved_agent)
+        } else {
+            crate::sandbox::restore_agent_from_run_state(agent, None)?
+        };
         rebound_state.set_current_agent(resumed_agent.clone());
         if matches!(
             rebound_state
@@ -1170,6 +1211,7 @@ impl Runner {
 
         let mut resumed_config = self.config.clone();
         resumed_config.max_turns = continued_state.remaining_turns();
+        resumed_config.sandbox_resume_state = continued_state.sandbox.clone();
         if let Some(trace) = &continued_state.trace {
             resumed_config.workflow_name = trace.workflow_name.clone();
         }
@@ -1523,6 +1565,54 @@ async fn apply_handoff_transition(
         normalized_step_items: new_step_items.clone(),
         session_step_items: new_step_items,
     })
+}
+
+fn prepare_agent_runtime_for_run(
+    run_config: &RunConfig,
+    identities: &crate::sandbox::SandboxIdentityMap,
+    runtimes_by_key: &mut BTreeMap<String, crate::sandbox::AgentSandboxRuntime>,
+    agent: &Agent,
+) -> Result<Agent> {
+    let Some(key) = crate::sandbox::sandbox_identity_key_for_agent(identities, agent) else {
+        return Ok(agent.clone());
+    };
+    let existing_runtime = runtimes_by_key.get(&key);
+    let resumed_state = run_config
+        .sandbox_resume_state
+        .as_ref()
+        .and_then(|state| state.sessions_by_agent.get(&key));
+    let prepared = crate::sandbox::prepare_agent_for_sandbox(
+        agent,
+        run_config,
+        existing_runtime,
+        resumed_state,
+    )?
+    .unwrap_or_else(|| agent.clone());
+    if let Some(runtime) = prepared.sandbox_runtime.clone() {
+        runtimes_by_key.insert(key, runtime);
+    }
+    Ok(prepared)
+}
+
+fn snapshot_sandbox_run_state(
+    identities: &crate::sandbox::SandboxIdentityMap,
+    runtimes_by_key: &BTreeMap<String, crate::sandbox::AgentSandboxRuntime>,
+    current_agent: &Agent,
+) -> Option<crate::sandbox::SandboxRunState> {
+    let current_agent_key =
+        crate::sandbox::sandbox_identity_key_for_agent(identities, current_agent)?;
+    let sessions_by_agent = runtimes_by_key
+        .iter()
+        .filter_map(|(key, runtime)| runtime.snapshot().map(|snapshot| (key.clone(), snapshot)))
+        .collect::<BTreeMap<_, _>>();
+    if sessions_by_agent.is_empty() {
+        None
+    } else {
+        Some(crate::sandbox::SandboxRunState {
+            current_agent_key,
+            sessions_by_agent,
+        })
+    }
 }
 
 fn merged_input_guardrails(

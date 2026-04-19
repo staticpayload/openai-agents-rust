@@ -1,0 +1,15 @@
+{
+  "featureId": "realtime-flat-alias-normalization-followup",
+  "reviewedAt": "2026-04-19T13:50:40.248283+00:00",
+  "commitId": "be38df098f23db9aae6c8ba59365c1cd360f5e6f",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The follow-up commit fixes the prior blocking mixed-update bug by copying explicit flat output alias updates and clear markers into the merged nested `audio.output` state before normalization, so later flat-only `voice`, `speed`, and `output_audio_format` updates stay authoritative even after normalized nested audio state has already been persisted. The new regressions cover both direct model payloads and public session state, and the pre-existing clear/normalize regression still exercises explicit clear semantics.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/runtime-provider/scrutiny/reviews/realtime-session-and-transport-parity.json",
+  "summary": "Reviewed the original failing feature (`7c4269b606150b3c33cc033f04f562a5e4fe0cbc`) together with the follow-up fix (`be38df098f23db9aae6c8ba59365c1cd360f5e6f`), plus the fix transcript skeleton, handoffs, mission guidance, and worker skill. The fix resolves the stale nested-audio override problem: `RealtimeSessionModelSettings::merge()` now mirrors flat output alias updates into `audio.output` before `normalize_effective()` runs, which keeps outbound payloads and persisted `session.model_settings()` aligned with the latest flat caller intent. Regression tests at `crates/openai-agents/tests/realtime_semantics.rs:646` and `:749` cover the model/session flat-after-nested sequences, while `:431` still covers explicit clear/unset behavior. No remaining blocking or non-blocking issues were found in this fix review, and no new shared-state gaps stood out beyond already-documented skill guidance."
+}

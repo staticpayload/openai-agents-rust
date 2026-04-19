@@ -1,7 +1,7 @@
 {
   "milestone": "runtime-provider",
-  "round": 3,
-  "status": "pass",
+  "round": 2,
+  "status": "fail",
   "validatorsRun": {
     "test": {
       "passed": true,
@@ -20,12 +20,26 @@
     }
   },
   "reviewsSummary": {
-    "total": 2,
-    "passed": 2,
-    "failed": 0,
-    "failedFeatures": []
+    "total": 12,
+    "passed": 10,
+    "failed": 2,
+    "failedFeatures": [
+      "realtime-session-and-transport-parity",
+      "trace-and-harness-metadata-parity"
+    ]
   },
-  "blockingIssues": [],
+  "blockingIssues": [
+    {
+      "featureId": "realtime-session-and-transport-parity",
+      "severity": "blocking",
+      "description": "`RealtimeSessionModelSettings::merge()` keeps the prior nested `audio` subtree when an update only uses flat aliases, and `normalize_effective()` then prefers the stale nested values over the new flat aliases. Because normalized settings are persisted back into session/model state, later flat-only updates like `voice`, `speed`, or `output_audio_format` can be ignored, so mixed flat/nested updates still do not normalize to the caller's intended effective settings."
+    },
+    {
+      "featureId": "trace-and-harness-metadata-parity",
+      "severity": "blocking",
+      "description": "`Runner` resolves trace metadata using only `self.config.model` before it falls back to `Agent.model` for the actual request. With `MultiProvider`, routed OpenAI models declared on `Agent.model` therefore skip the harness metadata hook for top-level trace metadata, leaving `agent_harness_id` absent on that public path even though request routing later succeeds."
+    }
+  ],
   "appliedUpdates": [],
   "suggestedGuidanceUpdates": [
     {
@@ -73,5 +87,5 @@
       "reason": "duplicate"
     }
   ],
-  "previousRound": ".factory/validation/runtime-provider/scrutiny/synthesis.round2.json"
+  "previousRound": ".factory/validation/runtime-provider/scrutiny/synthesis.round1.json"
 }

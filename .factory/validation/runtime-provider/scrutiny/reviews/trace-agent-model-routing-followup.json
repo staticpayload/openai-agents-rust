@@ -1,0 +1,15 @@
+{
+  "featureId": "trace-agent-model-routing-followup",
+  "reviewedAt": "2026-04-19T13:50:55.486603Z",
+  "commitId": "a459d57",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Pass. The original feature commit `a98cf07` forwarded `MultiProvider` trace/request hooks for routed OpenAI models, but it still resolved top-level trace metadata from `RunConfig.model` only. The follow-up commit `a459d57` now computes the same effective requested model fallback used by request preparation (`RunConfig.model` first, then `Agent.model`) before calling `resolve_trace_metadata`, and it adds a regression proving the `Agent.model` + `MultiProvider` path now carries `agent_harness_id` through top-level trace metadata, exported generation spans, and outbound request metadata while preserving the existing `RunConfig.model` and override-precedence behavior.",
+    "issues": []
+  },
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/runtime-provider/scrutiny/reviews/trace-and-harness-metadata-parity.json",
+  "summary": "Reviewed the prior failed review, the original `a98cf07` diff, the fix handoff/transcript, and the follow-up `a459d57` diff. `crates/agents-core/src/run.rs:430-441` now resolves trace metadata with the same effective model fallback later used for request preparation, and `crates/agents-core/src/run.rs:3277-3388` adds coverage for the routed `Agent.model` path. I found no remaining blocking or non-blocking issues in this fix and no new shared-state gaps to record."
+}

@@ -1590,6 +1590,94 @@ fn local_snapshot_restore_corrects_workspace_drift() {
 }
 
 #[test]
+fn local_snapshot_restore_corrects_symlink_drift() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let initial = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                manifest: Some(Manifest::default()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("initial sandbox prep succeeds");
+    initial
+        .session
+        .write_file("/workspace/target.txt", "persisted target\n")
+        .expect("target file write should succeed");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(
+        "target.txt",
+        initial.session.workspace_root().join("alias.txt"),
+    )
+    .expect("initial symlink creation should succeed");
+
+    let serialized = initial
+        .session
+        .serialize_session_state()
+        .expect("sandbox session state should serialize");
+    assert!(
+        serialized
+            .get("snapshot_fingerprint")
+            .and_then(|value| value.as_str())
+            .is_some(),
+        "serialized state should record a workspace fingerprint"
+    );
+
+    #[cfg(unix)]
+    {
+        fs::remove_file(initial.session.workspace_root().join("alias.txt"))
+            .expect("drifted symlink removal should succeed");
+        std::os::unix::fs::symlink(
+            "drifted-target.txt",
+            initial.session.workspace_root().join("alias.txt"),
+        )
+        .expect("drifted symlink creation should succeed");
+        fs::write(
+            initial.session.workspace_root().join("drifted-target.txt"),
+            "drifted\n",
+        )
+        .expect("drifted target write should succeed");
+    }
+
+    let restored_state = LocalSandboxSession::deserialize_session_state(serialized)
+        .expect("sandbox session state should deserialize");
+    let resumed = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session_state: Some(restored_state),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("session-state resume should prepare");
+
+    let restored_link = fs::read_link(resumed.session.workspace_root().join("alias.txt"))
+        .expect("restored symlink should exist");
+    assert_eq!(restored_link, PathBuf::from("target.txt"));
+    assert_eq!(
+        resumed
+            .session
+            .read_file("/workspace/alias.txt")
+            .expect("restored symlink should resolve to persisted target"),
+        "persisted target\n"
+    );
+    assert!(
+        !resumed
+            .session
+            .workspace_root()
+            .join("drifted-target.txt")
+            .exists(),
+        "restore should remove files introduced only by symlink drift"
+    );
+}
+
+#[test]
 fn sandbox_memory_persists_notes_across_resumed_sessions() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
@@ -1694,6 +1782,62 @@ fn sandbox_memory_persists_notes_across_resumed_sessions() {
             .expect("fresh sandbox note lookup should succeed"),
         None
     );
+}
+
+#[test]
+fn caller_owned_snapshot_roots_are_cleaned_up_or_reported() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let before_snapshot_roots = sandbox_temp_roots()
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("openai-agents-sandbox-snapshot-"))
+        })
+        .collect::<Vec<_>>();
+    let live_session = LocalSandboxSession::create_caller_owned(
+        Manifest::default().with_entry("notes.txt", File::from_text("caller-owned workspace\n")),
+    )
+    .expect("caller-owned live session should initialize");
+    let serialized = live_session
+        .serialize_session_state()
+        .expect("caller-owned session state should serialize");
+    let snapshot_root = PathBuf::from(
+        serialized
+            .get("snapshot_root")
+            .and_then(|value| value.as_str())
+            .expect("caller-owned session state should expose snapshot root"),
+    );
+    assert!(
+        snapshot_root.is_dir(),
+        "caller-owned snapshot root should exist before cleanup"
+    );
+
+    live_session
+        .cleanup()
+        .expect("caller-owned cleanup should succeed");
+    assert!(
+        !snapshot_root.exists(),
+        "cleanup should remove caller-owned snapshot roots"
+    );
+
+    let after_snapshot_roots = sandbox_temp_roots()
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("openai-agents-sandbox-snapshot-"))
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        after_snapshot_roots, before_snapshot_roots,
+        "caller-owned cleanup should not leak snapshot temp roots"
+    );
+
+    let workspace_root = live_session.workspace_root();
+    if workspace_root.exists() {
+        fs::remove_dir_all(workspace_root).expect("caller cleans up injected live session");
+    }
 }
 
 #[test]

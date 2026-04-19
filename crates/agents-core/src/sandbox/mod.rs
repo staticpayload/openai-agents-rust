@@ -471,19 +471,17 @@ impl LocalSandboxSession {
         if *cleaned {
             return Ok(());
         }
-        if self.inner.runner_owned {
-            if let Some(snapshot_root) = self
-                .inner
-                .persisted
-                .lock()
-                .expect("sandbox persisted lock")
-                .snapshot_root
-                .clone()
-            {
-                if snapshot_root.exists() {
-                    fs::remove_dir_all(snapshot_root)
-                        .map_err(|error| AgentsError::message(error.to_string()))?;
-                }
+        if let Some(snapshot_root) = self
+            .inner
+            .persisted
+            .lock()
+            .expect("sandbox persisted lock")
+            .snapshot_root
+            .clone()
+        {
+            if snapshot_root.exists() {
+                fs::remove_dir_all(snapshot_root)
+                    .map_err(|error| AgentsError::message(error.to_string()))?;
             }
         }
         if self.inner.runner_owned && self.inner.workspace_root.exists() {
@@ -1794,6 +1792,14 @@ fn fingerprint_path(root: &Path, path: &Path, hasher: &mut Sha256) -> Result<()>
             hasher.update(
                 fs::read(&entry_path).map_err(|error| AgentsError::message(error.to_string()))?,
             );
+        } else if metadata.file_type().is_symlink() {
+            hasher.update(b"symlink");
+            hasher.update(
+                fs::read_link(&entry_path)
+                    .map_err(|error| AgentsError::message(error.to_string()))?
+                    .to_string_lossy()
+                    .as_bytes(),
+            );
         }
     }
     Ok(())
@@ -1840,6 +1846,17 @@ fn copy_directory_contents(source: &Path, destination: &Path) -> Result<()> {
             }
             fs::copy(&source_path, &destination_path)
                 .map_err(|error| AgentsError::message(error.to_string()))?;
+        } else if file_type.is_symlink() {
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent)
+                    .map_err(|error| AgentsError::message(error.to_string()))?;
+            }
+            std::os::unix::fs::symlink(
+                fs::read_link(&source_path)
+                    .map_err(|error| AgentsError::message(error.to_string()))?,
+                &destination_path,
+            )
+            .map_err(|error| AgentsError::message(error.to_string()))?;
         }
     }
     Ok(())

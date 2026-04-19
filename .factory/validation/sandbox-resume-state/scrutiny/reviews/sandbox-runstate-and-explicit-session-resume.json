@@ -1,28 +1,15 @@
 {
   "featureId": "sandbox-runstate-and-explicit-session-resume",
-  "reviewedAt": "2026-04-19T15:54:27Z",
-  "commitId": "d892744092d7fdac5ede5cb446fff9e8dd6a24d1",
+  "reviewedAt": "2026-04-19T16:31:20Z",
+  "commitId": "5ddcc50",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "The feature wires sandbox metadata into `RunState` and adds resume helpers/tests, but the persisted state is not durable enough for runner-owned local sandboxes. It only stores the workspace path plus manifest, so serialized resumes depend on the original temp directory still existing instead of preserving the modified workspace contents across an actual teardown/resume boundary.",
-    "issues": [
-      {
-        "file": "crates/agents-core/src/sandbox/mod.rs",
-        "line": 394,
-        "severity": "blocking",
-        "description": "`LocalSandboxSessionState` only records the manifest and workspace path, and `LocalSandboxSession::resume` either reattaches to that path if it still exists or recreates only the original manifest. In the same commit, runner-owned sandboxes are deleted on drop (`crates/agents-core/src/sandbox/mod.rs:660-664` in d892744), so a serialized `RunState`/`session_state` cannot reliably preserve files written before interruption once the original session goes away. The new approval-resume test only inspects JSON and resumes the in-memory state before the original session is dropped (`crates/openai-agents/tests/sandbox_semantics.rs:1252-1286`), so it misses this durable-resume failure mode."
-      }
-    ]
+    "summary": "The prior durability gap is resolved at HEAD. `LocalSandboxSession::resume` now recreates a missing runner-owned workspace root before `restore_snapshot_if_needed()` rehydrates the snapshot-backed contents, so both interrupted `RunState` resumes and explicit `session_state` round-trips survive deletion of the original temp workspace while preserving approval continuation and prior files.",
+    "issues": []
   },
-  "sharedStateObservations": [
-    {
-      "area": "knowledge",
-      "observation": "The shared mission docs say `RunState` is the public pause/resume boundary, but they do not capture that runner-owned local sandboxes are temp-dir backed and get deleted when the owning session drops. That omission makes a path-only resume payload look sufficient even though durable local resumes need persisted workspace contents as well.",
-      "evidence": "Mission AGENTS.md and .factory/library/architecture.md both require `RunState` to remain the resume boundary; in commit d892744, `crates/agents-core/src/sandbox/mod.rs:376-382` stores only manifest/path metadata while `crates/agents-core/src/sandbox/mod.rs:660-664` deletes runner-owned workspaces on drop."
-    }
-  ],
-  "addressesFailureFrom": null,
-  "summary": "Fail: the feature restores sandbox sessions only while the original runner-owned workspace directory still exists. Because the serialized resume payload does not persist modified workspace contents, real durable RunState/session_state resumes can lose or reject pre-approval files after teardown even though the added tests pass in-process."
+  "sharedStateObservations": [],
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/sandbox-resume-state/scrutiny/reviews/sandbox-runstate-and-explicit-session-resume.json",
+  "summary": "Pass: re-reviewing the feature after commit `5ddcc50` shows the runner-owned workspace teardown case is now covered in both code and tests. I found no new blocking issues within this feature's scope."
 }

@@ -1,0 +1,59 @@
+{
+  "milestone": "sandbox-resume-state",
+  "round": 1,
+  "status": "fail",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "cargo test --workspace -- --test-threads=5",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "cargo check --workspace",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "cargo fmt --all --check",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 0,
+    "failed": 3,
+    "failedFeatures": [
+      "sandbox-live-session-ownership-and-manifest-updates",
+      "sandbox-runstate-and-explicit-session-resume",
+      "sandbox-local-snapshots-and-memory"
+    ]
+  },
+  "blockingIssues": [
+    {
+      "featureId": "sandbox-live-session-ownership-and-manifest-updates",
+      "severity": "blocking",
+      "description": "Interrupted runs still serialize caller-owned injected sandbox sessions into durable RunState, allowing caller-managed workspaces to be captured and later resumed through runner-managed state."
+    },
+    {
+      "featureId": "sandbox-runstate-and-explicit-session-resume",
+      "severity": "blocking",
+      "description": "Serialized local sandbox state stores only workspace path plus manifest metadata, so runner-owned workspaces do not survive a real teardown/resume boundary after the original temp directory is cleaned up."
+    },
+    {
+      "featureId": "sandbox-local-snapshots-and-memory",
+      "severity": "blocking",
+      "description": "Local snapshot fingerprinting and restore ignore symlinks, so symlink-only drift can be missed and restores can recreate incomplete workspaces."
+    }
+  ],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Documented in `.factory/library/architecture.md` that runner-owned local sandbox sessions are temp-dir backed and durable resume state must preserve workspace contents, not only path/manifest metadata.",
+      "sourceFeature": "sandbox-runstate-and-explicit-session-resume"
+    }
+  ],
+  "suggestedGuidanceUpdates": [],
+  "rejectedObservations": [],
+  "previousRound": null
+}

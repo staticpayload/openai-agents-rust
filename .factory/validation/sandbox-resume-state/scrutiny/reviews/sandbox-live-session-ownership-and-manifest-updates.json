@@ -1,22 +1,15 @@
 {
   "featureId": "sandbox-live-session-ownership-and-manifest-updates",
-  "reviewedAt": "2026-04-19T15:53:38.496251+00:00",
-  "commitId": "2266730",
+  "reviewedAt": "2026-04-19T16:33:06.503739+00:00",
+  "commitId": "8970a87aafe2f1b10dd5b7a3192f72403c40d702",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "Fail. The live-session reuse and manifest-delta logic itself is mostly sound: `prepare_sandbox_run()` now reuses an injected `LocalSandboxSession`, `create_caller_owned()` keeps the workspace caller-owned, and the diff/apply path rejects root changes, removals, and entry-type replacements before mutating the session manifest or workspace. However, the feature missed the caller-ownership boundary on interrupted runs. `run.rs` always snapshots sandbox state into durable `RunState`, and `AgentSandboxRuntime::snapshot()` always serializes the injected session's `LocalSandboxSessionState`, so caller-owned live sessions are still persisted into runner-managed resume state. That means an interrupted run can leak the caller's workspace root/manifest into `RunState` and later be resumed through `Runner::resume`, which contradicts the expected caller-managed semantics for injected live sessions.",
-    "issues": [
-      {
-        "file": "crates/agents-core/src/run.rs",
-        "line": 957,
-        "severity": "blocking",
-        "description": "Caller-owned injected sessions are still persisted into durable run state. `run_state.sandbox` is always populated from `current_agent.sandbox_runtime`, and `AgentSandboxRuntime::snapshot()` unconditionally serializes `self.session.session_state()` (`crates/agents-core/src/sandbox/mod.rs:845`). After this feature introduced caller-owned `SandboxRunConfig.session`, an interrupted run can now capture a caller-managed workspace root and manifest inside `RunState`, then reattach to it via `Runner::resume`. That breaks the feature contract that injected live sessions remain caller-managed rather than becoming runner-owned resume payload."
-      }
-    ]
+    "summary": "Pass. The prior blocker is resolved at HEAD: interrupted caller-owned injected sandbox sessions no longer serialize sandbox state into durable RunState, because Runner now only persists sandbox state when AgentSandboxRuntime::snapshot() returns Some(...) and snapshot() explicitly returns None for non-runner-owned sessions. The rest of the feature contract still holds in the current code: prepare_sandbox_run() reuses caller-owned LocalSandboxSession instances, live-session manifest updates validate forbidden root/removal/type-replacement changes before applying any workspace mutations, and facade-level sandbox semantics tests cover persistence across runs, manifest-update rejection, and durable-state omission.",
+    "issues": []
   },
   "sharedStateObservations": [],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed the mission metadata, worker transcript skeleton, handoff, commit 2266730, and the sandbox implementation/tests. The feature correctly preserves caller-owned workspace edits across sequential runs and rejects unsupported live-session manifest mutations without partial apply, but it fails review because interrupted runs still serialize injected live sessions into durable `RunState`, violating the intended caller-managed ownership boundary."
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/sandbox-resume-state/scrutiny/reviews/sandbox-live-session-ownership-and-manifest-updates.json",
+  "summary": "Re-reviewed the original failing feature against current HEAD, including the prior fail report, mission metadata, transcript skeleton for worker session f4810ae2-7f77-466b-b824-d760cde01513, the latest handoff, and the relevant commits/diffs (2266730 and 8970a87). The prior blocking issue is fixed, and I did not find any new blocking issues within this feature's scope."
 }

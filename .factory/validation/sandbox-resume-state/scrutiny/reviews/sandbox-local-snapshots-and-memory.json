@@ -1,28 +1,15 @@
 {
   "featureId": "sandbox-local-snapshots-and-memory",
-  "reviewedAt": "2026-04-19T15:53:16Z",
-  "commitId": "cac28a2cd48a5aff8264fc31549aa90063cfc70b",
+  "reviewedAt": "2026-04-19T16:31:00Z",
+  "commitId": "10a1fda",
   "transcriptSkeletonReviewed": true,
   "diffReviewed": true,
-  "status": "fail",
+  "status": "pass",
   "codeReview": {
-    "summary": "Fail. The commit adds the requested snapshot metadata fields and session-scoped note persistence, and the new tests cover the regular-file drift and same-session note round-trip cases. However, the snapshot implementation only fingerprints and copies directories plus regular files, so symlinks created inside a local sandbox are silently omitted from both the saved snapshot and the drift check. That means a resumed local workspace can incorrectly skip restore after symlink-only drift, or lose symlinks entirely when a restore does happen, which does not fully satisfy VAL-SANDBOX-011's requirement to restore drifted workspaces correctly.",
-    "issues": [
-      {
-        "file": "crates/agents-core/src/sandbox/mod.rs",
-        "line": 1779,
-        "severity": "blocking",
-        "description": "`fingerprint_path()` reads `symlink_metadata()` but only hashes entries when `metadata.is_dir()` or `metadata.is_file()` is true, so symlinks fall through without contributing to the fingerprint. `copy_directory_contents()` has the same blind spot at lines 1826-1828 and only copies directories plus regular files. Because local sandbox shell commands can create symlinks, serialized snapshot state can miss part of the workspace: symlink-only drift can compare equal and skip restore, and any restore after other drift will recreate the workspace without those symlinks. That leaves local snapshot resume short of the feature contract for drifted workspace restoration."
-      },
-      {
-        "file": "crates/agents-core/src/sandbox/mod.rs",
-        "line": 357,
-        "severity": "non_blocking",
-        "description": "`create_caller_owned()` now eagerly creates a hidden temp snapshot via `refresh_snapshot_state()` (lines 357-374, 1731-1757), but `cleanup()` only deletes `snapshot_root` for runner-owned sessions (lines 469-480). Caller-managed sessions therefore leak `openai-agents-sandbox-snapshot-*` directories, and the public API does not expose the snapshot path for callers to remove themselves."
-      }
-    ]
+    "summary": "Pass. Re-reviewing fix commit `10a1fda` shows the prior blocker is resolved: `fingerprint_path()` now hashes symlink entries and their targets, and `copy_directory_contents()` restores symlinks as symlinks, so symlink-only workspace drift now triggers restore and restores preserve the link structure. `LocalSandboxSession::cleanup()` also removes persisted `snapshot_root` for caller-owned sessions, while the existing memory-note flow in `LocalSandboxSessionState` still keeps notes resumable within the same sandbox session and absent from unrelated fresh sessions.",
+    "issues": []
   },
   "sharedStateObservations": [],
-  "addressesFailureFrom": null,
-  "summary": "Reviewed mission context, the feature metadata/assertions, the worker handoff and transcript skeleton for session `146c7738-92d9-4d5b-a1fd-4f38738b6909`, the `rust-sandbox-worker` skill, and commit `cac28a2cd48a5aff8264fc31549aa90063cfc70b`. The feature correctly adds serialized snapshot metadata and session-scoped memory notes for the exercised regular-file cases, but scrutiny should remain failing because the snapshot/diff helpers ignore symlinks, so resumed local sandboxes do not reliably restore all drifted workspace contents."
+  "addressesFailureFrom": "/Users/staticpayload/Mainframe/openai-agents-rust/.factory/validation/sandbox-resume-state/scrutiny/reviews/sandbox-local-snapshots-and-memory.json",
+  "summary": "Reviewed the mission metadata, prior failure report and synthesis, worker handoff and transcript skeleton for session `d181ec45-b64e-44bd-95e2-5e29b8a507b9`, the `rust-sandbox-worker` skill, current HEAD, and the `10a1fda` diff. Result: pass. The symlink snapshot gap called out in the prior review is fixed in `crates/agents-core/src/sandbox/mod.rs`, the new regressions at `crates/openai-agents/tests/sandbox_semantics.rs:1593` and `:1788` cover symlink-only drift restore and caller-owned snapshot cleanup, and I found no new blocking issues within this feature's scope."
 }

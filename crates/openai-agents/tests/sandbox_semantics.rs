@@ -645,6 +645,73 @@ fn sandbox_local_shell_starts_in_workspace_and_blocks_escape() {
 }
 
 #[test]
+fn sandbox_local_shell_blocks_interpreter_and_expansion_escapes() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let host_outside = unique_temp_path("sandbox-shell-interpreter-escape");
+    if host_outside.exists() {
+        fs::remove_file(&host_outside).expect("remove stale host outside file");
+    }
+
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default()),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+
+    let interpreter = prepared
+        .session
+        .run_shell(&format!(
+            "perl -e \"open my \\$fh, '>', q[{}] or die \\$!; print {{\\$fh}} q[escape]; close \\$fh;\"",
+            host_outside.display()
+        ))
+        .expect("interpreter command should run under confinement");
+    assert_ne!(interpreter.exit_code, 0);
+    assert!(
+        interpreter.stderr.contains("Operation not permitted")
+            || interpreter.stderr.contains("Permission denied")
+            || interpreter.stderr.contains("denied"),
+        "unexpected interpreter stderr: {}",
+        interpreter.stderr
+    );
+    assert!(
+        !host_outside.exists(),
+        "outside path should not be created through interpreter escape"
+    );
+
+    let expansion = prepared
+        .session
+        .run_shell(&format!(
+            "target='{}'; printf 'escape\\n' > \"$target\"",
+            host_outside.display()
+        ))
+        .expect("expansion command should run under confinement");
+    assert_ne!(expansion.exit_code, 0);
+    assert!(
+        !host_outside.exists(),
+        "outside path should not be created through shell expansion escape"
+    );
+
+    let nested = prepared
+        .session
+        .run_shell(&format!(
+            "sh -lc \"printf 'escape\\\\n' > {}\"",
+            host_outside.display()
+        ))
+        .expect("nested shell command should run under confinement");
+    assert_ne!(nested.exit_code, 0);
+    assert!(
+        !host_outside.exists(),
+        "outside path should not be created through nested shell escape"
+    );
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+}
+
+#[test]
 fn unix_local_pty_accepts_stdin_and_surfaces_output() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
@@ -678,6 +745,50 @@ fn unix_local_pty_accepts_stdin_and_surfaces_output() {
 
     let exit_code = pty.wait().expect("pty should exit cleanly");
     assert_eq!(exit_code, 0);
+
+    prepared.session.cleanup().expect("cleanup succeeds");
+}
+
+#[test]
+fn unix_local_pty_blocks_interpreter_and_expansion_escapes() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let host_outside = unique_temp_path("sandbox-pty-outside");
+    if host_outside.exists() {
+        fs::remove_file(&host_outside).expect("remove stale host outside file");
+    }
+
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            manifest: Some(Manifest::default()),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+    let prepared = prepare_sandbox_run(&sandbox_agent, &run_config).expect("sandbox prep succeeds");
+
+    let pty = prepared
+        .session
+        .open_pty(&format!(
+            "pwd; perl -e \"open my \\$fh, '>', q[{}] or die \\$!; print {{\\$fh}} q[escape]; close \\$fh;\"; target='{}'; printf 'escape\\n' > \"$target\"",
+            host_outside.display(),
+            host_outside.display()
+        ))
+        .expect("pty should start");
+    let output = pty
+        .wait_for_output(
+            &prepared.session.workspace_root().display().to_string(),
+            Duration::from_secs(2),
+        )
+        .expect("pty should emit workspace path");
+    assert!(output.contains(&prepared.session.workspace_root().display().to_string()));
+
+    let exit_code = pty.wait().expect("pty should exit after blocked escapes");
+    assert_ne!(exit_code, 0);
+    assert!(
+        !host_outside.exists(),
+        "outside path should not be created through PTY escape attempts"
+    );
 
     prepared.session.cleanup().expect("cleanup succeeds");
 }

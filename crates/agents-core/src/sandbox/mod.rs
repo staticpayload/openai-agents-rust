@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::io::{Read, Write};
@@ -410,10 +411,10 @@ impl LocalSandboxSession {
     pub fn run_shell(&self, command: &str) -> Result<LocalShellOutput> {
         validate_shell_command(&self.inner.logical_root, command)?;
 
-        let output = Command::new("/bin/sh")
-            .arg("-lc")
-            .arg(command)
-            .current_dir(&self.inner.workspace_root)
+        let env_vars = sandbox_command_env(&self.inner.workspace_root);
+        let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
+        let output = confined_shell_command(&shell_command, &self.inner.workspace_root, &env_vars)?
+            .current_dir("/")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -431,18 +432,16 @@ impl LocalSandboxSession {
     pub fn open_pty(&self, command: &str) -> Result<LocalSandboxPtySession> {
         validate_shell_command(&self.inner.logical_root, command)?;
 
-        let mut child = Command::new("/usr/bin/script")
-            .arg("-q")
-            .arg("/dev/null")
-            .arg("/bin/sh")
-            .arg("-lc")
-            .arg(command)
-            .current_dir(&self.inner.workspace_root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| AgentsError::message(error.to_string()))?;
+        let env_vars = sandbox_command_env(&self.inner.workspace_root);
+        let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
+        let mut child =
+            confined_pty_command(&shell_command, &self.inner.workspace_root, &env_vars)?
+                .current_dir("/")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|error| AgentsError::message(error.to_string()))?;
 
         let stdout = child
             .stdout
@@ -985,6 +984,238 @@ fn validate_shell_command(logical_root: &str, command: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn sandbox_command_env(workspace_root: &Path) -> BTreeMap<String, String> {
+    let mut env_vars: BTreeMap<String, String> = env::vars().collect();
+    env_vars.insert(
+        "HOME".to_owned(),
+        workspace_root.as_os_str().to_string_lossy().into_owned(),
+    );
+    env_vars
+}
+
+fn workspace_shell_command(workspace_root: &Path, command: &str) -> String {
+    format!(
+        "cd {} && {}",
+        shell_single_quote(workspace_root.as_os_str().to_string_lossy().as_ref()),
+        command
+    )
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn confined_shell_command(
+    command: &str,
+    workspace_root: &Path,
+    env_vars: &BTreeMap<String, String>,
+) -> Result<Command> {
+    let mut process = if cfg!(target_os = "macos") {
+        let sandbox_exec = darwin_sandbox_exec()?;
+        let profile = darwin_exec_profile(workspace_root, env_vars, Path::new("/bin/sh"));
+        let mut command_builder = Command::new(sandbox_exec);
+        command_builder
+            .arg("-p")
+            .arg(profile)
+            .arg("/bin/sh")
+            .arg("-lc")
+            .arg(command);
+        command_builder
+    } else {
+        let mut command_builder = Command::new("/bin/sh");
+        command_builder.arg("-lc").arg(command);
+        command_builder
+    };
+    process.envs(env_vars);
+    Ok(process)
+}
+
+fn confined_pty_command(
+    command: &str,
+    workspace_root: &Path,
+    env_vars: &BTreeMap<String, String>,
+) -> Result<Command> {
+    let mut process = Command::new("/usr/bin/script");
+    process.arg("-q").arg("/dev/null");
+
+    if cfg!(target_os = "macos") {
+        let sandbox_exec = darwin_sandbox_exec()?;
+        let profile = darwin_exec_profile(workspace_root, env_vars, Path::new("/bin/sh"));
+        process
+            .arg(sandbox_exec)
+            .arg("-p")
+            .arg(profile)
+            .arg("/bin/sh")
+            .arg("-lc")
+            .arg(command);
+    } else {
+        process.arg("/bin/sh").arg("-lc").arg(command);
+    }
+
+    process.envs(env_vars);
+    Ok(process)
+}
+
+fn darwin_sandbox_exec() -> Result<&'static str> {
+    let sandbox_exec = "/usr/bin/sandbox-exec";
+    if Path::new(sandbox_exec).exists() {
+        Ok(sandbox_exec)
+    } else {
+        Err(AgentsError::message(
+            "unix-local sandbox confinement requires /usr/bin/sandbox-exec on macOS",
+        ))
+    }
+}
+
+fn darwin_exec_profile(
+    workspace_root: &Path,
+    env_vars: &BTreeMap<String, String>,
+    executable: &Path,
+) -> String {
+    let mut extra_read_paths = darwin_additional_read_paths(env_vars, executable);
+    extra_read_paths.sort();
+    extra_read_paths.dedup();
+
+    let denied_paths = [
+        "/Users",
+        "/Volumes",
+        "/Applications",
+        "/Library",
+        "/opt",
+        "/etc",
+        "/private/etc",
+        "/tmp",
+        "/private/tmp",
+        "/private",
+        "/var",
+        "/usr",
+    ];
+
+    let mut rules = vec!["(version 1)".to_owned(), "(allow default)".to_owned()];
+
+    for path in denied_paths {
+        rules.push(format!(
+            "(deny file-read-data (subpath {}))",
+            sandbox_profile_literal(path)
+        ));
+        rules.push(format!(
+            "(deny file-write* (subpath {}))",
+            sandbox_profile_literal(path)
+        ));
+    }
+
+    let mut workspace_paths = vec![workspace_root.to_path_buf()];
+    if let Ok(canonical_workspace_root) = fs::canonicalize(workspace_root) {
+        if canonical_workspace_root != workspace_root {
+            workspace_paths.push(canonical_workspace_root);
+        }
+    }
+
+    for workspace_path in workspace_paths {
+        rules.push(format!(
+            "(allow file-read-data file-read-metadata (subpath {}))",
+            sandbox_profile_literal(&workspace_path)
+        ));
+        rules.push(format!(
+            "(allow file-write* (subpath {}))",
+            sandbox_profile_literal(&workspace_path)
+        ));
+    }
+
+    for path in extra_read_paths {
+        rules.push(format!(
+            "(allow file-read-data file-read-metadata (subpath {}))",
+            sandbox_profile_literal(path)
+        ));
+    }
+
+    rules.extend([
+        "(allow file-read-data file-read-metadata (subpath \"/usr/bin\"))".to_owned(),
+        "(allow file-read-data file-read-metadata (subpath \"/usr/lib\"))".to_owned(),
+        "(allow file-read-data file-read-metadata (subpath \"/bin\"))".to_owned(),
+        "(allow file-read-data file-read-metadata (subpath \"/System\"))".to_owned(),
+        "(allow file-read-data file-read-metadata (literal \"/private/var/select/sh\"))".to_owned(),
+        "(allow file-write* (literal \"/dev/null\"))".to_owned(),
+    ]);
+
+    rules.join("\n")
+}
+
+fn sandbox_profile_literal(path: impl AsRef<Path>) -> String {
+    format!(
+        "\"{}\"",
+        path.as_ref()
+            .display()
+            .to_string()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+    )
+}
+
+fn darwin_additional_read_paths(
+    env_vars: &BTreeMap<String, String>,
+    executable: &Path,
+) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Some(parent) = executable.parent() {
+        paths.push(parent.to_path_buf());
+    }
+
+    if let Some(path_var) = env_vars.get("PATH") {
+        for entry in path_var.split(':').filter(|entry| !entry.is_empty()) {
+            paths.extend(darwin_allowable_read_roots(Path::new(entry)));
+        }
+    }
+
+    paths
+}
+
+fn darwin_allowable_read_roots(path: &Path) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let expanded = expand_tilde(path);
+
+    if expanded.is_dir() {
+        candidates.push(expanded.clone());
+    } else if let Some(parent) = expanded.parent() {
+        candidates.push(parent.to_path_buf());
+    }
+
+    let resolved = fs::canonicalize(&expanded).unwrap_or(expanded.clone());
+    if resolved.is_dir() {
+        candidates.push(resolved.clone());
+    } else if let Some(parent) = resolved.parent() {
+        candidates.push(parent.to_path_buf());
+    }
+
+    let resolved_text = resolved.as_os_str().to_string_lossy();
+    if resolved_text == "/opt/homebrew" || resolved_text.starts_with("/opt/homebrew/") {
+        candidates.push(PathBuf::from("/opt/homebrew"));
+    }
+    if resolved_text == "/usr/local" || resolved_text.starts_with("/usr/local/") {
+        candidates.push(PathBuf::from("/usr/local"));
+    }
+    if resolved_text == "/Library/Frameworks" || resolved_text.starts_with("/Library/Frameworks/") {
+        candidates.push(PathBuf::from("/Library/Frameworks"));
+    }
+
+    candidates
+}
+
+fn expand_tilde(path: &Path) -> PathBuf {
+    let raw = path.as_os_str().to_string_lossy();
+    if raw == "~" {
+        return env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| path.to_path_buf());
+    }
+    if let Some(stripped) = raw.strip_prefix("~/") {
+        if let Some(home) = env::var_os("HOME") {
+            return PathBuf::from(home).join(stripped);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn shell_like_split(command: &str) -> Result<Vec<String>> {

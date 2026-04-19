@@ -641,3 +641,181 @@ async fn partial_session_updates_can_clear_and_normalize_state() {
         Some(RealtimeAudioFormat::Pcm16)
     );
 }
+
+#[tokio::test]
+async fn model_flat_alias_updates_override_stale_normalized_audio_state() {
+    let mut model = OpenAIRealtimeWebSocketModel {
+        config: RealtimeModelConfig {
+            model: Some("gpt-realtime-1.5".to_owned()),
+        },
+        transport: TransportConfig {
+            api_key: Some("sk-test".to_owned()),
+            websocket_url: Some("https://example.com/realtime".to_owned()),
+            call_id: None,
+            query_params: BTreeMap::new(),
+        },
+        ..OpenAIRealtimeWebSocketModel::default()
+    };
+    model.connect().await.expect("connect should succeed");
+
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            audio: Some(RealtimeAudioConfig {
+                output: Some(RealtimeAudioOutputConfig {
+                    format: Some(RealtimeAudioFormat::Pcm16),
+                    voice: Some("alloy".to_owned()),
+                    speed: Some(1.0),
+                    ..RealtimeAudioOutputConfig::default()
+                }),
+                ..RealtimeAudioConfig::default()
+            }),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("initial nested update should succeed");
+
+    model
+        .update_session(&RealtimeSessionModelSettings {
+            voice: Some("verse".to_owned()),
+            speed: Some(1.5),
+            output_audio_format: Some(RealtimeAudioFormat::G711Ulaw),
+            ..RealtimeSessionModelSettings::default()
+        })
+        .await
+        .expect("flat alias update should succeed");
+
+    let payload = model
+        .runtime_state()
+        .last_session_payload
+        .expect("flat update should record a payload")
+        .payload;
+    let output = payload
+        .get("audio")
+        .and_then(|audio| audio.get("output"))
+        .expect("payload should include normalized audio.output");
+    assert_eq!(
+        output.get("voice").and_then(serde_json::Value::as_str),
+        Some("verse")
+    );
+    assert_eq!(
+        output.get("speed").and_then(serde_json::Value::as_f64),
+        Some(1.5)
+    );
+    assert_eq!(
+        output
+            .get("format")
+            .and_then(|format| format.get("type"))
+            .and_then(serde_json::Value::as_str),
+        Some("audio/pcmu")
+    );
+
+    let applied = model
+        .applied_settings
+        .as_ref()
+        .expect("model should persist applied settings");
+    assert_eq!(applied.voice.as_deref(), Some("verse"));
+    assert_eq!(applied.speed, Some(1.5));
+    assert_eq!(
+        applied.output_audio_format,
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+    assert_eq!(
+        applied
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.as_deref()),
+        Some("verse")
+    );
+    assert_eq!(
+        applied
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.speed),
+        Some(1.5)
+    );
+    assert_eq!(
+        applied
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.format.clone()),
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+}
+
+#[tokio::test]
+async fn session_flat_alias_updates_override_stale_normalized_audio_state() {
+    let runner = RealtimeRunner::new(RealtimeAgent::new("assistant"));
+    let session = runner.run().await.expect("session should start");
+
+    session
+        .update_agent({
+            let mut configured = RealtimeAgent::new("assistant");
+            configured.model_settings = Some(RealtimeSessionModelSettings {
+                audio: Some(RealtimeAudioConfig {
+                    output: Some(RealtimeAudioOutputConfig {
+                        format: Some(RealtimeAudioFormat::Pcm16),
+                        voice: Some("alloy".to_owned()),
+                        speed: Some(1.0),
+                        ..RealtimeAudioOutputConfig::default()
+                    }),
+                    ..RealtimeAudioConfig::default()
+                }),
+                ..RealtimeSessionModelSettings::default()
+            });
+            configured
+        })
+        .await
+        .expect("initial nested session update should succeed");
+
+    session
+        .update_agent({
+            let mut updated = RealtimeAgent::new("assistant");
+            updated.model_settings = Some(RealtimeSessionModelSettings {
+                voice: Some("verse".to_owned()),
+                speed: Some(1.5),
+                output_audio_format: Some(RealtimeAudioFormat::G711Ulaw),
+                ..RealtimeSessionModelSettings::default()
+            });
+            updated
+        })
+        .await
+        .expect("flat alias session update should succeed");
+
+    let settings = session
+        .model_settings()
+        .await
+        .expect("session should expose normalized settings");
+    assert_eq!(settings.voice.as_deref(), Some("verse"));
+    assert_eq!(settings.speed, Some(1.5));
+    assert_eq!(
+        settings.output_audio_format,
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.voice.as_deref()),
+        Some("verse")
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.speed),
+        Some(1.5)
+    );
+    assert_eq!(
+        settings
+            .audio
+            .as_ref()
+            .and_then(|audio| audio.output.as_ref())
+            .and_then(|output| output.format.clone()),
+        Some(RealtimeAudioFormat::G711Ulaw)
+    );
+}

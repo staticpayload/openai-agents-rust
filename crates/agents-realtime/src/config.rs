@@ -380,7 +380,7 @@ impl RealtimeSessionModelSettings {
     }
 
     pub fn merge(&self, update: &Self) -> Self {
-        Self {
+        let mut merged = Self {
             model_name: update
                 .model_name
                 .clone()
@@ -473,7 +473,48 @@ impl RealtimeSessionModelSettings {
             clear_input_audio_transcription: update.clear_input_audio_transcription,
             clear_input_audio_noise_reduction: update.clear_input_audio_noise_reduction,
             clear_turn_detection: update.clear_turn_detection,
+        };
+
+        if update.clear_output_audio_format
+            || update.output_audio_format.is_some()
+            || update.clear_voice
+            || update.voice.is_some()
+            || update.clear_speed
+            || update.speed.is_some()
+        {
+            let audio = merged
+                .audio
+                .get_or_insert_with(RealtimeAudioConfig::default);
+            let output = audio
+                .output
+                .get_or_insert_with(RealtimeAudioOutputConfig::default);
+
+            if update.clear_output_audio_format {
+                output.format = None;
+                output.clear_format = true;
+            } else if let Some(format) = update.output_audio_format.clone() {
+                output.format = Some(format);
+                output.clear_format = false;
+            }
+
+            if update.clear_voice {
+                output.voice = None;
+                output.clear_voice = true;
+            } else if let Some(voice) = update.voice.clone() {
+                output.voice = Some(voice);
+                output.clear_voice = false;
+            }
+
+            if update.clear_speed {
+                output.speed = None;
+                output.clear_speed = true;
+            } else if let Some(speed) = update.speed {
+                output.speed = Some(speed);
+                output.clear_speed = false;
+            }
         }
+
+        merged
     }
 
     pub fn normalize_effective(&self) -> Self {

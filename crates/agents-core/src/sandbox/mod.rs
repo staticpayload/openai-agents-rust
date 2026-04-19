@@ -23,10 +23,12 @@ pub struct SandboxConcurrencyLimits {
     pub local_dir_files: Option<usize>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SandboxRunConfig {
     pub manifest: Option<Manifest>,
     pub concurrency_limits: SandboxConcurrencyLimits,
+    #[serde(skip, default)]
+    pub session: Option<LocalSandboxSession>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,8 +297,7 @@ pub struct LocalSandboxPtySession {
 #[derive(Debug)]
 struct LocalSandboxSessionInner {
     workspace_root: PathBuf,
-    logical_root: String,
-    manifest: Manifest,
+    manifest: Mutex<Manifest>,
     runner_owned: bool,
     cleaned: Mutex<bool>,
 }
@@ -309,16 +310,37 @@ struct LocalSandboxPtySessionInner {
 }
 
 impl LocalSandboxSession {
+    pub fn create_caller_owned(manifest: Manifest) -> Result<Self> {
+        let workspace_root = create_temp_workspace_root()?;
+        if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
+            let _ = fs::remove_dir_all(&workspace_root);
+            return Err(error);
+        }
+
+        Ok(Self {
+            inner: Arc::new(LocalSandboxSessionInner {
+                workspace_root,
+                manifest: Mutex::new(manifest),
+                runner_owned: false,
+                cleaned: Mutex::new(false),
+            }),
+        })
+    }
+
     pub fn workspace_root(&self) -> PathBuf {
         self.inner.workspace_root.clone()
     }
 
-    pub fn logical_root(&self) -> &str {
-        &self.inner.logical_root
+    pub fn logical_root(&self) -> String {
+        self.manifest().root
     }
 
-    pub fn manifest(&self) -> &Manifest {
-        &self.inner.manifest
+    pub fn manifest(&self) -> Manifest {
+        self.inner
+            .manifest
+            .lock()
+            .expect("sandbox manifest lock")
+            .clone()
     }
 
     pub fn runner_owned(&self) -> bool {
@@ -350,8 +372,9 @@ impl LocalSandboxSession {
         }
 
         let requested_path = Path::new(requested);
+        let logical_root = self.manifest().root;
         let relative = if requested_path.is_absolute() {
-            let logical_root = Path::new(&self.inner.logical_root);
+            let logical_root = Path::new(&logical_root);
             requested_path
                 .strip_prefix(logical_root)
                 .map_err(|_| AgentsError::message("path must stay within the sandbox workspace"))?
@@ -421,7 +444,7 @@ impl LocalSandboxSession {
     }
 
     pub fn run_shell(&self, command: &str) -> Result<LocalShellOutput> {
-        validate_shell_command(&self.inner.logical_root, command)?;
+        validate_shell_command(&self.logical_root(), command)?;
 
         let env_vars = sandbox_command_env(&self.inner.workspace_root);
         let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
@@ -442,7 +465,7 @@ impl LocalSandboxSession {
     }
 
     pub fn open_pty(&self, command: &str) -> Result<LocalSandboxPtySession> {
-        validate_shell_command(&self.inner.logical_root, command)?;
+        validate_shell_command(&self.logical_root(), command)?;
 
         let env_vars = sandbox_command_env(&self.inner.workspace_root);
         let shell_command = workspace_shell_command(&self.inner.workspace_root, command);
@@ -478,6 +501,27 @@ impl LocalSandboxSession {
                 reader: Mutex::new(Some(reader)),
             }),
         })
+    }
+
+    fn apply_live_manifest_update(&self, processed_manifest: Manifest) -> Result<()> {
+        let current_manifest = self.manifest();
+        if processed_manifest == current_manifest {
+            return Ok(());
+        }
+
+        validate_running_live_session_manifest_update(&current_manifest, &processed_manifest)?;
+        let entries_to_apply = diff_live_session_entries(
+            &current_manifest.entries,
+            &processed_manifest.entries,
+            Path::new(""),
+        )?;
+
+        for (rel_path, entry) in &entries_to_apply {
+            materialize_entry(entry, &self.inner.workspace_root, rel_path)?;
+        }
+
+        *self.inner.manifest.lock().expect("sandbox manifest lock") = processed_manifest;
+        Ok(())
     }
 }
 
@@ -553,25 +597,31 @@ pub fn prepare_sandbox_run(
     run_config: &crate::run_config::RunConfig,
 ) -> Result<PreparedSandboxRun> {
     let sandbox_config = run_config.sandbox.clone().unwrap_or_default();
-    let manifest = sandbox_config
-        .manifest
-        .or_else(|| agent.default_manifest.clone())
-        .unwrap_or_default();
-
-    let workspace_root = create_temp_workspace_root()?;
-    if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
-        let _ = fs::remove_dir_all(&workspace_root);
-        return Err(error);
-    }
-    let session = LocalSandboxSession {
-        inner: Arc::new(LocalSandboxSessionInner {
-            workspace_root,
-            logical_root: manifest.root.clone(),
-            manifest: manifest.clone(),
-            runner_owned: true,
-            cleaned: Mutex::new(false),
-        }),
+    let session = if let Some(session) = sandbox_config.session {
+        if let Some(manifest) = sandbox_config.manifest {
+            session.apply_live_manifest_update(manifest)?;
+        }
+        session
+    } else {
+        let manifest = sandbox_config
+            .manifest
+            .or_else(|| agent.default_manifest.clone())
+            .unwrap_or_default();
+        let workspace_root = create_temp_workspace_root()?;
+        if let Err(error) = materialize_manifest(&manifest, &workspace_root) {
+            let _ = fs::remove_dir_all(&workspace_root);
+            return Err(error);
+        }
+        LocalSandboxSession {
+            inner: Arc::new(LocalSandboxSessionInner {
+                workspace_root,
+                manifest: Mutex::new(manifest),
+                runner_owned: true,
+                cleaned: Mutex::new(false),
+            }),
+        }
     };
+    let manifest = session.manifest();
     let instructions = build_instructions(agent, &manifest);
     let tools = default_function_tools(session.clone(), &agent.capabilities)?;
 
@@ -733,6 +783,94 @@ fn materialize_entry(
         }
     }
     Ok(())
+}
+
+fn validate_running_live_session_manifest_update(
+    current_manifest: &Manifest,
+    processed_manifest: &Manifest,
+) -> Result<()> {
+    if processed_manifest.root != current_manifest.root {
+        return Err(AgentsError::message(
+            "Running injected sandbox sessions do not support capability changes to `manifest.root`; use a fresh session or a session_state resume flow.",
+        ));
+    }
+    Ok(())
+}
+
+fn diff_live_session_entries(
+    current_entries: &BTreeMap<String, ManifestEntry>,
+    processed_entries: &BTreeMap<String, ManifestEntry>,
+    parent_rel: &Path,
+) -> Result<Vec<(PathBuf, ManifestEntry)>> {
+    let removed = current_entries
+        .keys()
+        .filter(|key| !processed_entries.contains_key(*key))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !removed.is_empty() {
+        let removed_paths = removed
+            .iter()
+            .map(|rel| parent_rel.join(rel).display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AgentsError::message(format!(
+            "Running injected sandbox sessions do not support removing manifest entries: {removed_paths}."
+        )));
+    }
+
+    let mut entries_to_apply = Vec::new();
+    for (rel_name, processed_entry) in processed_entries {
+        let rel_path = parent_rel.join(rel_name);
+        let Some(current_entry) = current_entries.get(rel_name) else {
+            entries_to_apply.push((rel_path, processed_entry.clone()));
+            continue;
+        };
+
+        if let Some(delta_entry) =
+            diff_live_session_entry(&rel_path, current_entry, processed_entry)?
+        {
+            entries_to_apply.push((rel_path, delta_entry));
+        }
+    }
+
+    Ok(entries_to_apply)
+}
+
+fn diff_live_session_entry(
+    rel_path: &Path,
+    current_entry: &ManifestEntry,
+    processed_entry: &ManifestEntry,
+) -> Result<Option<ManifestEntry>> {
+    if current_entry == processed_entry {
+        return Ok(None);
+    }
+
+    if std::mem::discriminant(current_entry) != std::mem::discriminant(processed_entry) {
+        return Err(AgentsError::message(format!(
+            "Running injected sandbox sessions do not support replacing manifest entry types at {}; use a fresh session or a session_state resume flow.",
+            rel_path.display()
+        )));
+    }
+
+    match (current_entry, processed_entry) {
+        (ManifestEntry::Dir(current_dir), ManifestEntry::Dir(processed_dir)) => {
+            let changed_children = diff_live_session_entries(
+                &current_dir.entries,
+                &processed_dir.entries,
+                Path::new(""),
+            )?;
+            if changed_children.is_empty() {
+                return Ok(None);
+            }
+
+            let mut entries = BTreeMap::new();
+            for (child_path, child_entry) in changed_children {
+                entries.insert(child_path.display().to_string(), child_entry);
+            }
+            Ok(Some(ManifestEntry::Dir(Dir { entries })))
+        }
+        _ => Ok(Some(processed_entry.clone())),
+    }
 }
 
 fn copy_local_dir(source: &Path, destination: &Path) -> Result<()> {

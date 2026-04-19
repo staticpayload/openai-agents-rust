@@ -6,7 +6,9 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use openai_agents::sandbox::{Dir, File, LocalDir, Manifest, prepare_sandbox_run};
+use openai_agents::sandbox::{
+    Dir, File, LocalDir, LocalSandboxSession, Manifest, prepare_sandbox_run,
+};
 use openai_agents::{
     ApplyPatchOperation, Model, ModelProvider, ModelRequest, ModelResponse, OutputItem, RunConfig,
     RunContext, RunContextWrapper, Runner, SandboxAgent, SandboxCapability, SandboxRunConfig, Tool,
@@ -919,6 +921,218 @@ fn sandbox_local_shell_blocks_interpreter_and_expansion_escapes() {
     );
 
     prepared.session.cleanup().expect("cleanup succeeds");
+}
+
+#[tokio::test]
+async fn injected_live_sessions_persist_changes_across_runs() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let provider = CapturingSandboxProvider {
+        model: Arc::new(CapturingSandboxModel {
+            requests: requests.clone(),
+        }),
+    };
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let live_session = LocalSandboxSession::create_caller_owned(
+        Manifest::default().with_entry("notes.txt", File::from_text("caller-owned workspace\n")),
+    )
+    .expect("caller-owned live session should initialize");
+    let workspace_root = live_session.workspace_root();
+    assert!(!live_session.runner_owned());
+
+    let run_config = RunConfig {
+        sandbox: Some(SandboxRunConfig {
+            session: Some(live_session.clone()),
+            ..SandboxRunConfig::default()
+        }),
+        ..RunConfig::default()
+    };
+
+    let first = prepare_sandbox_run(&sandbox_agent, &run_config).expect("first run prepares");
+    Runner::new()
+        .with_model_provider(Arc::new(provider.clone()))
+        .run(&first.agent, "first run")
+        .await
+        .expect("first injected-session run succeeds");
+    first
+        .session
+        .write_file("/workspace/persisted.txt", "written once\n")
+        .expect("workspace edit should succeed");
+    assert_eq!(
+        first
+            .session
+            .read_file("/workspace/persisted.txt")
+            .expect("persisted file should be readable after first run"),
+        "written once\n"
+    );
+    first
+        .session
+        .cleanup()
+        .expect("caller-owned cleanup should be a no-op");
+    assert!(
+        workspace_root.exists(),
+        "caller-owned session workspace should remain after runner cleanup"
+    );
+
+    let second = prepare_sandbox_run(&sandbox_agent, &run_config).expect("second run prepares");
+    Runner::new()
+        .with_model_provider(Arc::new(provider))
+        .run(&second.agent, "second run")
+        .await
+        .expect("second injected-session run succeeds");
+
+    assert_eq!(second.session.workspace_root(), workspace_root);
+    assert!(!second.session.runner_owned());
+
+    let read_tool = second
+        .agent
+        .find_function_tool("sandbox_read_file", None)
+        .expect("read tool is attached");
+    let persisted = read_tool
+        .invoke(
+            tool_context("sandbox_read_file"),
+            serde_json::json!({ "path": "/workspace/persisted.txt" }),
+        )
+        .await
+        .expect("persisted file should remain readable on the next run");
+    let ToolOutput::Text(persisted) = persisted else {
+        panic!("read tool should return text output");
+    };
+    assert_eq!(persisted.text, "written once\n");
+
+    assert_eq!(
+        requests.lock().await.len(),
+        2,
+        "both runs should reach the model without recreating the workspace"
+    );
+
+    second
+        .session
+        .cleanup()
+        .expect("caller-owned cleanup should remain a no-op");
+    assert!(
+        workspace_root.exists(),
+        "caller-owned session should remain caller-managed after the second run"
+    );
+
+    fs::remove_dir_all(&workspace_root).expect("caller cleans up injected live session");
+}
+
+#[test]
+fn running_sessions_reject_unsupported_manifest_mutations() {
+    let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
+    let sandbox_agent = SandboxAgent::builder("sandbox").build();
+    let live_session = LocalSandboxSession::create_caller_owned(
+        Manifest::default().with_entry("existing.txt", File::from_text("existing\n")),
+    )
+    .expect("caller-owned live session should initialize");
+    let workspace_root = live_session.workspace_root();
+
+    let updated_manifest = live_session
+        .manifest()
+        .with_entry("added.txt", File::from_text("added\n"));
+    let updated = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session: Some(live_session.clone()),
+                manifest: Some(updated_manifest.clone()),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect("compatible manifest additions should apply");
+    assert_eq!(
+        updated
+            .session
+            .read_file("/workspace/added.txt")
+            .expect("added manifest file should materialize"),
+        "added\n"
+    );
+    assert_eq!(updated.session.manifest(), updated_manifest);
+
+    let invalid_root_manifest = Manifest {
+        root: "/other-workspace".to_owned(),
+        ..updated.session.manifest()
+    }
+    .with_entry("root-change.txt", File::from_text("blocked\n"));
+    let before_root_change = live_session.manifest();
+    let root_change = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session: Some(live_session.clone()),
+                manifest: Some(invalid_root_manifest),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect_err("running session should reject root mutation");
+    assert!(root_change.to_string().contains("`manifest.root`"));
+    assert_eq!(live_session.manifest(), before_root_change);
+    assert!(
+        !workspace_root.join("root-change.txt").exists(),
+        "unsupported root mutation should not partially materialize new files"
+    );
+
+    let removal_manifest = Manifest::default().with_entry("added.txt", File::from_text("added\n"));
+    let before_removal = live_session.manifest();
+    let removal = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session: Some(live_session.clone()),
+                manifest: Some(
+                    removal_manifest
+                        .with_entry("should-not-appear.txt", File::from_text("blocked\n")),
+                ),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect_err("running session should reject entry removal");
+    assert!(removal.to_string().contains("removing manifest entries"));
+    assert_eq!(live_session.manifest(), before_removal);
+    assert!(
+        !workspace_root.join("should-not-appear.txt").exists(),
+        "rejected removals should not partially apply other entry changes"
+    );
+
+    let replacement_manifest = Manifest::default()
+        .with_entry(
+            "existing.txt",
+            Dir::new().with_entry("nested.txt", File::from_text("blocked\n")),
+        )
+        .with_entry("added.txt", File::from_text("added\n"))
+        .with_entry("replacement-side-effect.txt", File::from_text("blocked\n"));
+    let before_replacement = live_session.manifest();
+    let replacement = prepare_sandbox_run(
+        &sandbox_agent,
+        &RunConfig {
+            sandbox: Some(SandboxRunConfig {
+                session: Some(live_session.clone()),
+                manifest: Some(replacement_manifest),
+                ..SandboxRunConfig::default()
+            }),
+            ..RunConfig::default()
+        },
+    )
+    .expect_err("running session should reject entry type replacement");
+    assert!(
+        replacement
+            .to_string()
+            .contains("replacing manifest entry types")
+    );
+    assert_eq!(live_session.manifest(), before_replacement);
+    assert!(
+        !workspace_root.join("replacement-side-effect.txt").exists(),
+        "rejected type replacements should not partially apply other entry changes"
+    );
+
+    fs::remove_dir_all(workspace_root).expect("caller cleans up injected live session");
 }
 
 #[test]

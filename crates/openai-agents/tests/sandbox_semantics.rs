@@ -1286,8 +1286,7 @@ async fn caller_owned_sessions_are_not_serialized_into_run_state() {
     fs::remove_dir_all(workspace_root).expect("caller cleans up injected live session");
 }
 
-#[tokio::test]
-async fn sandbox_runstate_resume_restores_workspace_after_approval() {
+async fn sandbox_runstate_resume_restores_workspace_after_teardown_impl() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let provider = Arc::new(CapturingSandboxProvider {
         model: Arc::new(ApprovalResumeSandboxModel::default()),
@@ -1358,6 +1357,23 @@ async fn sandbox_runstate_resume_restores_workspace_after_approval() {
             .and_then(|value| value.as_bool()),
         Some(true)
     );
+    let snapshot_root = PathBuf::from(
+        sandbox_payload
+            .get("snapshot_root")
+            .and_then(|value| value.as_str())
+            .expect("run state should capture a durable snapshot root"),
+    );
+    assert!(
+        snapshot_root.is_dir(),
+        "runner-owned interrupted state should keep a durable snapshot outside the workspace"
+    );
+    let original_workspace_root = prepared.session.workspace_root();
+    fs::remove_dir_all(&original_workspace_root)
+        .expect("test should tear down original runner-owned workspace before resume");
+    assert!(
+        !original_workspace_root.exists(),
+        "original runner-owned workspace should be removed before resume"
+    );
 
     state.approve_for_tool(
         "call-1",
@@ -1380,12 +1396,22 @@ async fn sandbox_runstate_resume_restores_workspace_after_approval() {
             .durable_state()
             .and_then(|state| state.sandbox.as_ref())
             .map(|state| state.session_state.workspace_root.clone()),
-        Some(prepared.session.workspace_root())
+        Some(original_workspace_root.clone())
+    );
+    assert_eq!(
+        resumed
+            .durable_state()
+            .and_then(|state| state.sandbox.as_ref())
+            .and_then(|state| state.session_state.snapshot_root.clone()),
+        Some(snapshot_root)
+    );
+    assert!(
+        original_workspace_root.exists(),
+        "resume should recreate the runner-owned workspace root from durable state"
     );
 }
 
-#[test]
-fn explicit_session_state_roundtrip_resumes_same_workspace() {
+fn explicit_session_state_roundtrip_resumes_same_workspace_after_teardown_impl() {
     let _guard = localdir_hook_lock().lock().expect("sandbox test lock");
     let sandbox_agent = SandboxAgent::builder("sandbox").build();
     let initial = prepare_sandbox_run(
@@ -1408,8 +1434,23 @@ fn explicit_session_state_roundtrip_resumes_same_workspace() {
         .session
         .serialize_session_state()
         .expect("sandbox session state should serialize");
+    let original_workspace_root = initial.session.workspace_root();
     let restored_state = LocalSandboxSession::deserialize_session_state(serialized)
         .expect("sandbox session state should deserialize");
+    let snapshot_root = restored_state
+        .snapshot_root
+        .clone()
+        .expect("serialized state should include a durable snapshot root");
+    assert!(
+        snapshot_root.is_dir(),
+        "serialized session state should keep a durable snapshot outside the workspace"
+    );
+    fs::remove_dir_all(&original_workspace_root)
+        .expect("test should tear down original runner-owned workspace before explicit resume");
+    assert!(
+        !original_workspace_root.exists(),
+        "original runner-owned workspace should be gone before explicit resume"
+    );
     let restored = prepare_sandbox_run(
         &sandbox_agent,
         &RunConfig {
@@ -1422,10 +1463,7 @@ fn explicit_session_state_roundtrip_resumes_same_workspace() {
     )
     .expect("session-state resume should prepare");
 
-    assert_eq!(
-        restored.session.workspace_root(),
-        initial.session.workspace_root()
-    );
+    assert_eq!(restored.session.workspace_root(), original_workspace_root);
     assert_eq!(
         restored
             .session
@@ -1438,13 +1476,37 @@ fn explicit_session_state_roundtrip_resumes_same_workspace() {
         .session
         .write_file("/workspace/extended.txt", "still same workspace\n")
         .expect("resumed session should keep extending the same workspace");
+    assert!(
+        restored.session.workspace_root().exists(),
+        "explicit session_state resume should recreate the workspace root after teardown"
+    );
     assert_eq!(
-        initial
+        restored
             .session
             .read_file("/workspace/extended.txt")
-            .expect("original session should see changes from resumed handle"),
+            .expect("resumed session should read newly extended content"),
         "still same workspace\n"
     );
+}
+
+#[tokio::test]
+async fn sandbox_runstate_resume_restores_workspace_after_teardown() {
+    sandbox_runstate_resume_restores_workspace_after_teardown_impl().await;
+}
+
+#[test]
+fn explicit_session_state_roundtrip_resumes_same_workspace_after_teardown() {
+    explicit_session_state_roundtrip_resumes_same_workspace_after_teardown_impl();
+}
+
+#[tokio::test]
+async fn sandbox_runstate_resume_restores_workspace_after_approval() {
+    sandbox_runstate_resume_restores_workspace_after_teardown_impl().await;
+}
+
+#[test]
+fn explicit_session_state_roundtrip_resumes_same_workspace() {
+    explicit_session_state_roundtrip_resumes_same_workspace_after_teardown_impl();
 }
 
 #[test]

@@ -426,10 +426,15 @@ impl LocalSandboxSession {
     pub fn resume(state: LocalSandboxSessionState) -> Result<Self> {
         if state.workspace_root_ready {
             if !state.workspace_root.is_dir() {
-                return Err(AgentsError::message(format!(
-                    "sandbox workspace `{}` is not available for resume",
-                    state.workspace_root.display()
-                )));
+                if state.workspace_root_owned {
+                    fs::create_dir_all(&state.workspace_root)
+                        .map_err(|error| AgentsError::message(error.to_string()))?;
+                } else {
+                    return Err(AgentsError::message(format!(
+                        "sandbox workspace `{}` is not available for resume",
+                        state.workspace_root.display()
+                    )));
+                }
             }
         } else {
             fs::create_dir_all(&state.workspace_root)
